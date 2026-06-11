@@ -132,11 +132,12 @@ def assert_split_namespace_installed(python: Path) -> None:
     run([str(python), "-c", code], cwd=tempfile.gettempdir(), env=python_env())
 
 
-def install_wheel(python: Path, wheel: Path, *, with_deps: bool) -> None:
+def install_wheel(python: Path, wheel: Path, *, with_deps: bool, extra: str | None = None) -> None:
     cmd = [str(python), "-m", "pip", "install"]
     if not with_deps:
         cmd.extend(["--no-index", "--no-deps"])
-    cmd.append(str(wheel))
+    spec = f"{wheel}[{extra}]" if extra else str(wheel)
+    cmd.append(spec)
     run(cmd, timeout=900)
 
 
@@ -145,6 +146,8 @@ def main() -> int:
     parser.add_argument("dist_dir", type=Path, help="directory containing split package wheels")
     parser.add_argument("--version", help="expected package version")
     parser.add_argument("--with-deps", action="store_true", help="install runtime dependencies and run full import smoke")
+    parser.add_argument("--backend", default="cuda", choices=["cuda", "rocm", "xpu", "npu", "cpu"],
+                        help="backend extra to install when --with-deps is set (default: cuda)")
     args = parser.parse_args()
 
     core_wheel = find_wheel(args.dist_dir, "fla_core")
@@ -163,10 +166,12 @@ def main() -> int:
         venv.EnvBuilder(with_pip=True).create(venv_dir)
         python = venv_python(venv_dir)
 
-        install_wheel(python, core_wheel, with_deps=args.with_deps)
+        install_wheel(python, core_wheel, with_deps=args.with_deps,
+                      extra=args.backend if args.with_deps else None)
         assert_core_only_import(python, version)
 
-        install_wheel(python, ext_wheel, with_deps=args.with_deps)
+        install_wheel(python, ext_wheel, with_deps=args.with_deps,
+                      extra=args.backend if args.with_deps else None)
         assert_split_namespace_installed(python)
         if args.with_deps:
             run([str(python), "-m", "pip", "check"])

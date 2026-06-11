@@ -58,12 +58,15 @@ dance is no longer needed.
 
 ```sh
 # 1. install CANN + source set_env.sh
-# 2. install fla with the npu extra (pins torch / torch_npu / triton-ascend)
+# 2. install the CANN-matched torch (do this BEFORE step 3 so the [npu] extra
+#    doesn't pull a CUDA torch from PyPI on x86)
+pip install torch==2.6.0  # use your Ascend-recommended channel here
+# 3. install fla with the npu extra (pulls torch_npu + triton-ascend)
 pip install flash-linear-attention[npu]
 ```
 
 `triton-ascend` 3.2.1 is tagged but not yet on PyPI, so the `[npu]` extra
-currently pins `torch==2.6.0`, `torch_npu==2.6.0`, `triton-ascend==3.2.0`.
+currently pins `torch_npu==2.6.0` and `triton-ascend==3.2.0`.
 
 ## From source
 
