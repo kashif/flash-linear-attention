@@ -193,63 +193,75 @@ def chunkwise_fwd_kernel(
 
         if MIN_LEVEL <= 0 and MAX_LEVEL >= 0:
             if chunk_index & 1:
-                desc_l = make_tensor_descriptor(level_scales + (bos * H + i_h) * L, [T, L], [H * L, 1], [BT, 1])
-                b_l = desc_l.load([i_t * BT, num_intra_levels])
+                o_t_lla = i_t * BT + tl.arange(0, BT)
+
+                b_l = tl.load(level_scales + (bos * H + i_h) * L + o_t_lla * H * L + (num_intra_levels), mask=o_t_lla < T, other=0)[:, None]
                 b_o += tl.dot((b_l * b_q), kv_0.to(b_q.dtype)) * tl.exp(b_g)[:, None]
         if MIN_LEVEL <= 1 and MAX_LEVEL >= 1:
             if chunk_index & 2:
-                desc_l = make_tensor_descriptor(level_scales + (bos * H + i_h) * L, [T, L], [H * L, 1], [BT, 1])
-                b_l = desc_l.load([i_t * BT, num_intra_levels + 1])
+                o_t_lla = i_t * BT + tl.arange(0, BT)
+
+                b_l = tl.load(level_scales + (bos * H + i_h) * L + o_t_lla * H * L + (num_intra_levels + 1), mask=o_t_lla < T, other=0)[:, None]
                 b_o += tl.dot((b_l * b_q), kv_1.to(b_q.dtype)) * tl.exp(b_g)[:, None]
         if MIN_LEVEL <= 2 and MAX_LEVEL >= 2:
             if chunk_index & 4:
-                desc_l = make_tensor_descriptor(level_scales + (bos * H + i_h) * L, [T, L], [H * L, 1], [BT, 1])
-                b_l = desc_l.load([i_t * BT, num_intra_levels + 2])
+                o_t_lla = i_t * BT + tl.arange(0, BT)
+
+                b_l = tl.load(level_scales + (bos * H + i_h) * L + o_t_lla * H * L + (num_intra_levels + 2), mask=o_t_lla < T, other=0)[:, None]
                 b_o += tl.dot((b_l * b_q), kv_2.to(b_q.dtype)) * tl.exp(b_g)[:, None]
         if MIN_LEVEL <= 3 and MAX_LEVEL >= 3:
             if chunk_index & 8:
-                desc_l = make_tensor_descriptor(level_scales + (bos * H + i_h) * L, [T, L], [H * L, 1], [BT, 1])
-                b_l = desc_l.load([i_t * BT, num_intra_levels + 3])
+                o_t_lla = i_t * BT + tl.arange(0, BT)
+
+                b_l = tl.load(level_scales + (bos * H + i_h) * L + o_t_lla * H * L + (num_intra_levels + 3), mask=o_t_lla < T, other=0)[:, None]
                 b_o += tl.dot((b_l * b_q), kv_3.to(b_q.dtype)) * tl.exp(b_g)[:, None]
         if MIN_LEVEL <= 4 and MAX_LEVEL >= 4:
             if chunk_index & 16:
-                desc_l = make_tensor_descriptor(level_scales + (bos * H + i_h) * L, [T, L], [H * L, 1], [BT, 1])
-                b_l = desc_l.load([i_t * BT, num_intra_levels + 4])
+                o_t_lla = i_t * BT + tl.arange(0, BT)
+
+                b_l = tl.load(level_scales + (bos * H + i_h) * L + o_t_lla * H * L + (num_intra_levels + 4), mask=o_t_lla < T, other=0)[:, None]
                 b_o += tl.dot((b_l * b_q), kv_4.to(b_q.dtype)) * tl.exp(b_g)[:, None]
         if MIN_LEVEL <= 5 and MAX_LEVEL >= 5:
             if chunk_index & 32:
-                desc_l = make_tensor_descriptor(level_scales + (bos * H + i_h) * L, [T, L], [H * L, 1], [BT, 1])
-                b_l = desc_l.load([i_t * BT, num_intra_levels + 5])
+                o_t_lla = i_t * BT + tl.arange(0, BT)
+
+                b_l = tl.load(level_scales + (bos * H + i_h) * L + o_t_lla * H * L + (num_intra_levels + 5), mask=o_t_lla < T, other=0)[:, None]
                 b_o += tl.dot((b_l * b_q), kv_5.to(b_q.dtype)) * tl.exp(b_g)[:, None]
         if MIN_LEVEL <= 6 and MAX_LEVEL >= 6:
             if chunk_index & 64:
-                desc_l = make_tensor_descriptor(level_scales + (bos * H + i_h) * L, [T, L], [H * L, 1], [BT, 1])
-                b_l = desc_l.load([i_t * BT, num_intra_levels + 6])
+                o_t_lla = i_t * BT + tl.arange(0, BT)
+
+                b_l = tl.load(level_scales + (bos * H + i_h) * L + o_t_lla * H * L + (num_intra_levels + 6), mask=o_t_lla < T, other=0)[:, None]
                 b_o += tl.dot((b_l * b_q), kv_6.to(b_q.dtype)) * tl.exp(b_g)[:, None]
         if MIN_LEVEL <= 7 and MAX_LEVEL >= 7:
             if chunk_index & 128:  # 8192 - 16384
-                desc_l = make_tensor_descriptor(level_scales + (bos * H + i_h) * L, [T, L], [H * L, 1], [BT, 1])
-                b_l = desc_l.load([i_t * BT, num_intra_levels + 7])
+                o_t_lla = i_t * BT + tl.arange(0, BT)
+
+                b_l = tl.load(level_scales + (bos * H + i_h) * L + o_t_lla * H * L + (num_intra_levels + 7), mask=o_t_lla < T, other=0)[:, None]
                 b_o += tl.dot((b_l * b_q), kv_7.to(b_q.dtype)) * tl.exp(b_g)[:, None]
         if MIN_LEVEL <= 8 and MAX_LEVEL >= 8:
             if chunk_index & 256:
-                desc_l = make_tensor_descriptor(level_scales + (bos * H + i_h) * L, [T, L], [H * L, 1], [BT, 1])
-                b_l = desc_l.load([i_t * BT, num_intra_levels + 8])
+                o_t_lla = i_t * BT + tl.arange(0, BT)
+
+                b_l = tl.load(level_scales + (bos * H + i_h) * L + o_t_lla * H * L + (num_intra_levels + 8), mask=o_t_lla < T, other=0)[:, None]
                 b_o += tl.dot((b_l * b_q), kv_8.to(b_q.dtype)) * tl.exp(b_g)[:, None]
         if MIN_LEVEL <= 9 and MAX_LEVEL >= 9:
             if chunk_index & 512:
-                desc_l = make_tensor_descriptor(level_scales + (bos * H + i_h) * L, [T, L], [H * L, 1], [BT, 1])
-                b_l = desc_l.load([i_t * BT, num_intra_levels + 9])
+                o_t_lla = i_t * BT + tl.arange(0, BT)
+
+                b_l = tl.load(level_scales + (bos * H + i_h) * L + o_t_lla * H * L + (num_intra_levels + 9), mask=o_t_lla < T, other=0)[:, None]
                 b_o += tl.dot((b_l * b_q), kv_9.to(b_q.dtype)) * tl.exp(b_g)[:, None]
         if MIN_LEVEL <= 10 and MAX_LEVEL >= 10:
             if chunk_index & 1024:
-                desc_l = make_tensor_descriptor(level_scales + (bos * H + i_h) * L, [T, L], [H * L, 1], [BT, 1])
-                b_l = desc_l.load([i_t * BT, num_intra_levels + 10])
+                o_t_lla = i_t * BT + tl.arange(0, BT)
+
+                b_l = tl.load(level_scales + (bos * H + i_h) * L + o_t_lla * H * L + (num_intra_levels + 10), mask=o_t_lla < T, other=0)[:, None]
                 b_o += tl.dot((b_l * b_q), kv_10.to(b_q.dtype)) * tl.exp(b_g)[:, None]
         if MIN_LEVEL <= 11 and MAX_LEVEL >= 11:
             if chunk_index & 2048:
-                desc_l = make_tensor_descriptor(level_scales + (bos * H + i_h) * L, [T, L], [H * L, 1], [BT, 1])
-                b_l = desc_l.load([i_t * BT, num_intra_levels + 11])
+                o_t_lla = i_t * BT + tl.arange(0, BT)
+
+                b_l = tl.load(level_scales + (bos * H + i_h) * L + o_t_lla * H * L + (num_intra_levels + 11), mask=o_t_lla < T, other=0)[:, None]
                 b_o += tl.dot((b_l * b_q), kv_11.to(b_q.dtype)) * tl.exp(b_g)[:, None]
 
         desc_o.store([i_t * BT + output_offset, 0], b_o.to(desc_o.dtype))
@@ -478,14 +490,14 @@ def copy_input_kernel(
         desc_k_new.store([i_t * BT, 0], b_k)
         desc_v_new.store([i_t * BT, 0], b_v)
 
+        o_t_lla = i_t * BT + tl.arange(0, BT)
         for i in range(L):
-            desc_l = make_tensor_descriptor(level_scales + (bos * H + i_h) * L, [T, L], [H * L, 1], [BT, 1])
-            desc_l_new = make_tensor_descriptor(level_scales_new + (bos * H + i_h) * L, [T, L], [H * L, 1], [BT, 1])
-            b_l = desc_l.load([i_t * BT + input_offset, i])
+            b_l = tl.load(level_scales + (bos * H + i_h) * L + (o_t_lla + input_offset) * H * L + i,
+                          mask=(o_t_lla + input_offset) < T, other=0)
             if i_t == 0:
-                desc_l_prev = make_tensor_descriptor(level_scales_prev + (i_n * BT * H + i_h) * L, [BT, L], [H * L, 1], [BT, 1])
-                b_l += desc_l_prev.load([0, i])
-            desc_l_new.store([i_t * BT, i], b_l)
+                b_l += tl.load(level_scales_prev + (i_n * BT * H + i_h) * L + tl.arange(0, BT) * H * L + i)
+            tl.store(level_scales_new + (bos * H + i_h) * L + o_t_lla * H * L + i, b_l,
+                     mask=o_t_lla < T)
 
 
 @triton.heuristics(
@@ -542,10 +554,11 @@ def copy_last_chunk_kernel(
     desc_k_prev.store([0, 0], desc_k.load([seq_offset, 0]))
     desc_v_prev.store([0, 0], desc_v.load([seq_offset, 0]))
 
+    o_t_lla = tl.arange(0, BT)
     for i in range(L):
-        desc_l = make_tensor_descriptor(level_scales + (bos * H + i_h) * L, [T, L], [H * L, 1], [BT, 1])
-        desc_l_prev = make_tensor_descriptor(level_scales_prev + (i_n * BT * H + i_h) * L, [BT, L], [H * L, 1], [BT, 1])
-        desc_l_prev.store([0, i], desc_l.load([seq_offset, i]))
+        b_l = tl.load(level_scales + (bos * H + i_h) * L + (seq_offset + o_t_lla) * H * L + i,
+                      mask=(seq_offset + o_t_lla) < T, other=0)
+        tl.store(level_scales_prev + (i_n * BT * H + i_h) * L + o_t_lla * H * L + i, b_l)
 
 
 @triton.heuristics({"IS_VARLEN": lambda args: args["cu_seqlens"] is not None})
