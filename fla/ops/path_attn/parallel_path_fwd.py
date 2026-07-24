@@ -76,15 +76,15 @@ def parallel_path_fwd_kernel(
         b_g_cumsum_q = None
 
     for offset in range((i_t + 1) * BT - 2 * BS, i_t*BT-BS, -BS):
-        p_k = tl.make_block_ptr(k + (bos * H + i_h) * K, (K, T), (1, K*H), (0, offset), (BK, BS), (0, 1))  # GQA when H!=HQ
-        p_v = tl.make_block_ptr(v + (bos * H + i_h) * V, (T, V), (V*H, 1), (offset, 0), (BS, BV), (1, 0))  # GQA when H!=HQ
+        desc_k = make_tensor_descriptor(k + (bos * H + i_h) * K, [T, K], [K*H, 1], [BS, BK])
+        desc_v = make_tensor_descriptor(v + (bos * H + i_h) * V, [T, V], [V*H, 1], [BS, BV])
         desc_w1 = make_tensor_descriptor(w1 + (bos * H + i_h) * K, [T, K], [K*H, 1], [BS, BK])
         desc_w2 = make_tensor_descriptor(w2 + (bos * H + i_h) * K, [T, K], [K*H, 1], [BS, BK])
         # [BK, BS]
 
-        b_k = tl.load(p_k, boundary_check=(0, 1))
+        b_k = tl.trans(desc_k.load([offset, 0]))
         # [BS, BV]
-        b_v = tl.load(p_v, boundary_check=(0, 1))
+        b_v = desc_v.load([offset, 0])
         # [BK, BK]
         b_w1 = tl.trans(desc_w1.load([offset, 0]))
         b_w2 = desc_w2.load([offset, 0])
@@ -111,14 +111,14 @@ def parallel_path_fwd_kernel(
     tl.debug_barrier()
 
     for offset in range(i_t * BT - BS, -BS, -BS):
-        p_k = tl.make_block_ptr(k + (bos * H + i_h) * K, (K, T), (1, K*H), (0, offset), (BK, BS), (0, 1))  # GQA when H!=HQ
-        p_v = tl.make_block_ptr(v + (bos * H + i_h) * V, (T, V), (V*H, 1), (offset, 0), (BS, BV), (1, 0))  # GQA when H!=HQ
+        desc_k = make_tensor_descriptor(k + (bos * H + i_h) * K, [T, K], [K*H, 1], [BS, BK])
+        desc_v = make_tensor_descriptor(v + (bos * H + i_h) * V, [T, V], [V*H, 1], [BS, BV])
         desc_w1 = make_tensor_descriptor(w1 + (bos * H + i_h) * K, [T, K], [K*H, 1], [BS, BK])
         desc_w2 = make_tensor_descriptor(w2 + (bos * H + i_h) * K, [T, K], [K*H, 1], [BS, BK])
         # [BK, BS]
-        b_k = tl.load(p_k, boundary_check=(0, 1))
+        b_k = tl.trans(desc_k.load([offset, 0]))
         # [BS, BV]
-        b_v = tl.load(p_v, boundary_check=(0, 1))
+        b_v = desc_v.load([offset, 0])
         b_w1 = tl.trans(desc_w1.load([offset, 0]))
         b_w2 = desc_w2.load([offset, 0])
         # [BT, BS]

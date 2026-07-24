@@ -327,8 +327,8 @@ def chunk_oja_bwd_kernel_dhu_blockdim64(
         dht += i_nh * K*V
 
     if USE_FINAL_STATE_GRADIENT:
-        p_dht1 = tl.make_block_ptr(dht, (K, V), (V, 1), (i_k * BK, 0), (BK, 64), (1, 0))  # [BK, BV]
-        b_dh1 += tl.load(p_dht1, boundary_check=(0, 1))
+        desc_dht1 = make_tensor_descriptor(dht, [K, V], [V, 1], [BK, 64])
+        b_dh1 += desc_dht1.load([i_k * BK, 0])
         if V > 64:
             desc_dht2 = make_tensor_descriptor(dht, [K, V], [V, 1], [BK, 64])
             b_dh2 += desc_dht2.load([i_k * BK, 64])
@@ -355,8 +355,8 @@ def chunk_oja_bwd_kernel_dhu_blockdim64(
         last_idx = min((i_t + 1) * BT, T) - 1
 
         # Update dk_new, 按K切分
-        p_dk = tl.make_block_ptr(dk, (T, K), (stride_k, 1), (i_t * BT, i_k * BK), (BT, BK), (1, 0))  # [BT, BK]
-        p_dk2 = tl.make_block_ptr(dk2, (T, K), (stride_k, 1), (i_t * BT, i_k * BK), (BT, BK), (1, 0))  # [BT, BK]
+        desc_dk = make_tensor_descriptor(dk, [T, K], [stride_k, 1], [BT, BK])
+        desc_dk2 = make_tensor_descriptor(dk2, [T, K], [stride_k, 1], [BT, BK])
 
         if V > 0:
             desc_v = make_tensor_descriptor(vg, [T, V], [stride_v, 1], [BT, 64])
@@ -378,22 +378,22 @@ def chunk_oja_bwd_kernel_dhu_blockdim64(
             b_v = desc_v.load([i_t * BT, 192])
             b_dk += tl.dot(b_v, tl.trans(b_dh4).to(b_v.dtype))
 
-        b_dk += tl.load(p_dk, boundary_check=(0, 1))
+        b_dk += desc_dk.load([i_t * BT, i_k * BK])
 
-        tl.store(p_dk2, b_dk.to(p_dk.dtype.element_ty), boundary_check=(0, 1))
+        desc_dk2.store([i_t * BT, i_k * BK], b_dk.to(desc_dk.dtype))
 
         # Update dh, 按照K切分，收集所有V维度，q一次就好，wdo要收集所有
 
-        p_q = tl.make_block_ptr(q, (K, T), (1, stride_k), (i_k * BK, i_t * BT), (BK, BT), (0, 1))  # [BK, BT]
-        b_q = tl.load(p_q, boundary_check=(0, 1))
+        desc_q = make_tensor_descriptor(q, [T, K], [stride_k, 1], [BT, BK])
+        b_q = tl.trans(desc_q.load([i_t * BT, i_k * BK]))
 
         if V > 0:
-            p_do = tl.make_block_ptr(do, (T, V), (stride_v, 1), (i_t * BT, 0), (BT, 64), (1, 0))  # [BT, BV]
-            b_do = tl.load(p_do, boundary_check=(0, 1))
-            p_w = tl.make_block_ptr(w, (T, V), (stride_v, 1), (i_t * BT, 0), (BT, 64), (1, 0))  # [BT, BV]
-            b_w = tl.load(p_w, boundary_check=(0, 1))
-            p_gv = tl.make_block_ptr(gv, (T, V), (stride_v, 1), (i_t * BT, 0), (BT, 64), (1, 0))  # [BT, BV]
-            b_gv = tl.load(p_gv, boundary_check=(0, 1))
+            desc_do = make_tensor_descriptor(do, [T, V], [stride_v, 1], [BT, 64])
+            b_do = desc_do.load([i_t * BT, 0])
+            desc_w = make_tensor_descriptor(w, [T, V], [stride_v, 1], [BT, 64])
+            b_w = desc_w.load([i_t * BT, 0])
+            desc_gv = make_tensor_descriptor(gv, [T, V], [stride_v, 1], [BT, 64])
+            b_gv = desc_gv.load([i_t * BT, 0])
             if USE_GV:
                 o_v1 = tl.arange(0, 64)
                 b_gv_last1 = tl.load(gv + last_idx * H*V + o_v1, mask=(o_v1 < V), other=0.)
@@ -405,10 +405,10 @@ def chunk_oja_bwd_kernel_dhu_blockdim64(
         if V > 64:
             desc_do = make_tensor_descriptor(do, [T, V], [stride_v, 1], [BT, 64])
             b_do = desc_do.load([i_t * BT, 64])
-            p_w = tl.make_block_ptr(w, (T, V), (stride_v, 1), (i_t * BT, 64), (BT, 64), (1, 0))  # [BT, BV]
-            b_w = tl.load(p_w, boundary_check=(0, 1))
-            p_gv = tl.make_block_ptr(gv, (T, V), (stride_v, 1), (i_t * BT, 64), (BT, 64), (1, 0))  # [BT, BV]
-            b_gv = tl.load(p_gv, boundary_check=(0, 1))
+            desc_w = make_tensor_descriptor(w, [T, V], [stride_v, 1], [BT, 64])
+            b_w = desc_w.load([i_t * BT, 64])
+            desc_gv = make_tensor_descriptor(gv, [T, V], [stride_v, 1], [BT, 64])
+            b_gv = desc_gv.load([i_t * BT, 64])
             if USE_GV:
                 o_v2 = 64 + o_v1
                 b_gv_last2 = tl.load(gv + last_idx * H*V + o_v2, mask=(o_v2 < V), other=0.)
@@ -419,10 +419,10 @@ def chunk_oja_bwd_kernel_dhu_blockdim64(
         if V > 128:
             desc_do = make_tensor_descriptor(do, [T, V], [stride_v, 1], [BT, 64])
             b_do = desc_do.load([i_t * BT, 128])
-            p_w = tl.make_block_ptr(w, (T, V), (stride_v, 1), (i_t * BT, 128), (BT, 64), (1, 0))  # [BT, BV]
-            b_w = tl.load(p_w, boundary_check=(0, 1))
-            p_gv = tl.make_block_ptr(gv, (T, V), (stride_v, 1), (i_t * BT, 128), (BT, 64), (1, 0))  # [BT, BV]
-            b_gv = tl.load(p_gv, boundary_check=(0, 1))
+            desc_w = make_tensor_descriptor(w, [T, V], [stride_v, 1], [BT, 64])
+            b_w = desc_w.load([i_t * BT, 128])
+            desc_gv = make_tensor_descriptor(gv, [T, V], [stride_v, 1], [BT, 64])
+            b_gv = desc_gv.load([i_t * BT, 128])
             if USE_GV:
                 o_v3 = 128 + o_v1
                 b_gv_last3 = tl.load(gv + last_idx * H*V + o_v3, mask=(o_v3 < V), other=0.)
@@ -433,10 +433,10 @@ def chunk_oja_bwd_kernel_dhu_blockdim64(
         if V > 192:
             desc_do = make_tensor_descriptor(do, [T, V], [stride_v, 1], [BT, 64])
             b_do = desc_do.load([i_t * BT, 192])
-            p_w = tl.make_block_ptr(w, (T, V), (stride_v, 1), (i_t * BT, 192), (BT, 64), (1, 0))  # [BT, BV]
-            b_w = tl.load(p_w, boundary_check=(0, 1))
-            p_gv = tl.make_block_ptr(gv, (T, V), (stride_v, 1), (i_t * BT, 192), (BT, 64), (1, 0))  # [BT, BV]
-            b_gv = tl.load(p_gv, boundary_check=(0, 1))
+            desc_w = make_tensor_descriptor(w, [T, V], [stride_v, 1], [BT, 64])
+            b_w = desc_w.load([i_t * BT, 192])
+            desc_gv = make_tensor_descriptor(gv, [T, V], [stride_v, 1], [BT, 64])
+            b_gv = desc_gv.load([i_t * BT, 192])
             if USE_GV:
                 o_v4 = 192 + o_v1
                 b_gv_last4 = tl.load(gv + last_idx * H*V + o_v4, mask=(o_v4 < V), other=0.)

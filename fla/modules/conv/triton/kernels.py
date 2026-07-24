@@ -370,9 +370,10 @@ def causal_conv1d_update_kernel(
     b_cache = tl.zeros((BD, BW), dtype=tl.float32)
 
     if USE_INITIAL_STATE:
-        # 2. Shift Cache (Read [1:])
-        p_cache_read = tl.make_block_ptr( cache + i_n * D*W, shape=(D, W), strides=(W, 1), offsets=(i_d * BD, 1), block_shape=(BD, BW), order=(1, 0) )
-        b_cache = tl.load(p_cache_read, boundary_check=(0, 1)).to(tl.float32)
+        # 2. Shift Cache (Read [1:]). BW is typically 4 (kernel size) so TD's 16-byte
+        # last-dim requirement can be violated for small dtypes; use raw pointer + mask.
+        cache_addr = cache + i_n * D*W + o_d[:, None] * W + (o_w + 1)[None, :]
+        b_cache = tl.load(cache_addr, mask=m_d[:, None] & ((o_w + 1) < W), other=0).to(tl.float32)
 
         # 3. Fill x to the last position
         m_update = o_w == (W - 1)
@@ -396,8 +397,8 @@ def causal_conv1d_update_kernel(
     tl.store(y + i_n * stride_y_n + o_d * stride_y_d, tl.cast(b_y, dtype=y.dtype.element_ty, fp_downcast_rounding='rtne'), mask=m_d)
 
     if USE_INITIAL_STATE:
-        p_cache_write = tl.make_block_ptr( cache + i_n * D*W, shape=(D, W), strides=(W, 1), offsets=(i_d * BD, 0), block_shape=(BD, BW), order=(1, 0) )
-        tl.store(p_cache_write, tl.cast(b_cache, dtype=cache.dtype.element_ty, fp_downcast_rounding='rtne'), boundary_check=(0, 1))
+        cache_out = cache + i_n * D*W + o_d[:, None] * W + o_w[None, :]
+        tl.store(cache_out, tl.cast(b_cache, dtype=cache.dtype.element_ty, fp_downcast_rounding='rtne'), mask=m_d[:, None] & m_w[None, :])
 
 
 @triton.heuristics({
