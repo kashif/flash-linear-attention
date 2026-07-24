@@ -103,6 +103,7 @@ def chunk_gated_delta_rule_fwd_kkt_solve_kernel(
 
     # load gate if used
     if USE_G:
+        pass
 
         b_g0 = tl.load(g + bos * HV + i_h + (i_tc0 + tl.arange(0, BC)) * HV, mask=(i_tc0 + tl.arange(0, BC)) < T, other=0).to(tl.float32)
         b_g1 = tl.load(g + bos * HV + i_h + (i_tc1 + tl.arange(0, BC)) * HV, mask=(i_tc1 + tl.arange(0, BC)) < T, other=0).to(tl.float32)

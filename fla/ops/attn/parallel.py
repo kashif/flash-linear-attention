@@ -80,6 +80,7 @@ def parallel_attn_fwd_kernel(
     b_acc = tl.zeros([BT], dtype=tl.float32)
 
     if USE_G:
+        pass
         b_gq = tl.load(g_cumsum + bos * HQ + i_hq + (i_t * BT + tl.arange(0, BT)) * HQ, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0).to(tl.float32)
     else:
         b_gq = None
@@ -177,7 +178,7 @@ def parallel_attn_fwd_kernel(
     b_m += log2(b_acc)
     desc_o.store([i_t * BT, i_v * BV], b_o.to(desc_o.dtype))
     if i_v == 0:
-        tl.store(lse + bos * HQ + i_hq + (i_t * BT + tl.arange(0, BS)) * HQ, b_m.to((lse + bos * HQ + i_hq).dtype.element_ty), mask=(i_t * BT + tl.arange(0, BS)) < T)
+        tl.store(lse + bos * HQ + i_hq + (i_t * BT + tl.arange(0, BT)) * HQ, b_m.to((lse + bos * HQ + i_hq).dtype.element_ty), mask=(i_t * BT + tl.arange(0, BT)) < T)
 
 
 @triton.jit
@@ -257,14 +258,14 @@ def parallel_attn_bwd_kernel_dq(
     # [BT, BV]
     b_do = desc_do.load([i_t * BT, i_v * BV])
     # [BT]
-    b_lse = tl.load(lse + bos * HQ + i_hq + (i_t * BT + tl.arange(0, BS)) * HQ, mask=(i_t * BT + tl.arange(0, BS)) < T, other=0)
-    b_delta = tl.load(delta + bos * HQ + i_hq + (i_t * BT + tl.arange(0, BS)) * HQ, mask=(i_t * BT + tl.arange(0, BS)) < T, other=0)
+    b_lse = tl.load(lse + bos * HQ + i_hq + (i_t * BT + tl.arange(0, BT)) * HQ, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0)
+    b_delta = tl.load(delta + bos * HQ + i_hq + (i_t * BT + tl.arange(0, BT)) * HQ, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0)
 
     # [BT, BK]
     b_dq = tl.zeros([BT, BK], dtype=tl.float32)
     if USE_G:
         b_dg = tl.zeros([BT], dtype=tl.float32)
-        b_gq = tl.load(g_cumsum + bos * HQ + i_hq + (i_t * BT + tl.arange(0, BS)) * HQ, mask=(i_t * BT + tl.arange(0, BS)) < T, other=0).to(tl.float32)
+        b_gq = tl.load(g_cumsum + bos * HQ + i_hq + (i_t * BT + tl.arange(0, BT)) * HQ, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0).to(tl.float32)
     else:
         b_gq = None
         b_dg = None
@@ -315,7 +316,8 @@ def parallel_attn_bwd_kernel_dq(
         b_s = tl.dot(b_q, b_k) * scale * RCP_LN2
 
         if USE_G:
-            b_gk = tl.load(g_cumsum + bos * HQ + i_hq + (i_s + tl.arange(0, BT)) * HQ, mask=(i_s + tl.arange(0, BT)) < T, other=0).to(tl.float32)
+            pass
+            b_gk = tl.load(g_cumsum + bos * HQ + i_hq + (i_s + tl.arange(0, BS)) * HQ, mask=(i_s + tl.arange(0, BS)) < T, other=0).to(tl.float32)
             b_s += b_gq[:, None] - b_gk[None, :]
         if USE_WINDOW:
             b_p = tl.where(
@@ -336,6 +338,7 @@ def parallel_attn_bwd_kernel_dq(
     b_dq *= scale
     desc_dq.store([i_t * BT, 0], b_dq.to(desc_dq.dtype))
     if USE_G:
+        pass
         tl.store(dg_cumsum + bos * HQ + i_hq + (i_t * BT + tl.arange(0, BT)) * HQ, b_dg.to((dg_cumsum + bos * HQ + i_hq).dtype.element_ty), mask=(i_t * BT + tl.arange(0, BT)) < T)
 
 
@@ -403,6 +406,7 @@ def parallel_attn_bwd_kernel_dkv(
     o_k = i_t * BT + tl.arange(0, BT)
 
     if USE_G:
+        pass
         b_gk = tl.load(g_cumsum + bos * HQ + i_hq + (i_t * BT + tl.arange(0, BT)) * HQ, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0).to(tl.float32)
         b_dg = tl.zeros([BT], dtype=tl.float32)
     else:
@@ -426,6 +430,7 @@ def parallel_attn_bwd_kernel_dkv(
         # [BT, BS]
         b_s = tl.dot(b_k, tl.trans(b_q)) * scale * RCP_LN2
         if USE_G:
+            pass
             b_gq = tl.load(g_cumsum + bos * HQ + i_hq + (i_s + tl.arange(0, BS)) * HQ, mask=(i_s + tl.arange(0, BS)) < T, other=0).to(tl.float32)
             b_s += b_gq[None, :] - b_gk[:, None]
         if USE_WINDOW:
@@ -468,6 +473,7 @@ def parallel_attn_bwd_kernel_dkv(
         # [BT, BS]
         b_s = tl.dot(b_k, tl.trans(b_q)) * scale * RCP_LN2
         if USE_G:
+            pass
             b_gq = tl.load(g_cumsum + bos * HQ + i_hq + (i_s + tl.arange(0, BS)) * HQ, mask=(i_s + tl.arange(0, BS)) < T, other=0).to(tl.float32)
             b_s += b_gq[None, :] - b_gk[:, None]
         if USE_WINDOW:
@@ -489,6 +495,7 @@ def parallel_attn_bwd_kernel_dkv(
     desc_dk.store([i_t * BT, 0], b_dk.to(desc_dk.dtype))
     desc_dv.store([i_t * BT, i_v * BV], b_dv.to(desc_dv.dtype))
     if USE_G:
+        pass
         tl.store(dg_cumsum + bos * HQ + i_hq + (i_t * BT + tl.arange(0, BT)) * HQ, b_dg.to((dg_cumsum + bos * HQ + i_hq).dtype.element_ty), mask=(i_t * BT + tl.arange(0, BT)) < T)
 
 

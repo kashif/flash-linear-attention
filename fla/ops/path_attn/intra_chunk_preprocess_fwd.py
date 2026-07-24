@@ -107,10 +107,10 @@ def intra_chunk_preprocess_fwd_kernel(
         desc_w2.store([i_t * BT, 0], b_Twb.to(desc_w2.dtype))
         b_T_wbk = tl.dot(b_T.to(b_kt.dtype), b_wbk).to(b_kt.dtype)
         desc_k_new = make_tensor_descriptor(k_new, [T, K], [K*H, 1], [BT, BK])
-        tl.store(p_k_new, (b_kt - tl.dot(tl.trans(b_w.to(b_kt.dtype)), b_T_wbk)
-                           ).to(desc_k_new.dtype), boundary_check=(0, 1))
+        desc_k_new.store([i_t * BT, 0], tl.trans((b_kt - tl.dot(tl.trans(b_w.to(b_kt.dtype)), b_T_wbk) ).to(desc_k_new.dtype)))
 
     if USE_G:
+        pass
         b_g_cumsum = tl.load(g_cumsum + (i_t * BT + tl.arange(0, BT)) * HQ, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0)
         b_A = b_A + (b_g_cumsum[:, None] - b_g_cumsum[None, :])
         b_A = tl.where((i_t * BT + tl.arange(0, BT) < T)[:, None], b_A, float("-inf"))  # avoid nan

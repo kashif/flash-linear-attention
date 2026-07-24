@@ -80,12 +80,7 @@ def attnres_fwd_kernel(
         p_v = tl.multiple_of(p_v, 16)
 
         # [BL, BD] gather: row l from source l at offset i_n*D + o_d
-        b_v = tl.load(
-            tl.multiple_of(p_v[:, None] + (i_n * D + o_d[None, :]), (1, 16)),
-            mask=m_l[:, None] & m_d[None, :],
-            other=0.0,
-            eviction_policy="evict_first",
-        ).to(tl.float32)
+        b_v = tl.load( tl.multiple_of(p_v[:, None] + (i_n * D + o_d[None, :]), (1, 16)), mask=m_l[:, None] & m_d[None, :], other=0.0, eviction_policy="evict_first", ).to(tl.float32)
 
         # [BL]
         b_rstd = tl.rsqrt(tl.sum(b_v * b_v, axis=1) / D + eps)
@@ -177,11 +172,7 @@ def attnres_bwd_kernel_dv(
             for i in tl.static_range(1, L2):
                 p_v = tl.where(o_l == i, res[i], p_v)
             p_v = tl.multiple_of(p_v, 16)
-            b_v = tl.load(
-                tl.multiple_of(p_v[:, None] + (i_n * D + o_d[None, :]), (1, 16)),
-                mask=m_l[:, None] & m_d[None, :],
-                other=0.0,
-            ).to(tl.float32)
+            b_v = tl.load( tl.multiple_of(p_v[:, None] + (i_n * D + o_d[None, :]), (1, 16)), mask=m_l[:, None] & m_d[None, :], other=0.0, ).to(tl.float32)
             b_logit = tl.load(logit + i_n + (i_l * BL + tl.arange(0, BL)) * N, mask=(i_l * BL + tl.arange(0, BL)) < L, other=0).to(tl.float32)
             b_p = tl.where(m_l, exp(b_logit * scale - b_lse), 0.0)
             b_o_pre += tl.sum(b_p[:, None] * b_v, axis=0)
@@ -214,11 +205,7 @@ def attnres_bwd_kernel_dv(
         p_v = tl.multiple_of(p_v, 16)
         p_dv = tl.multiple_of(p_dv, 16)
         # [BL, BD] v tile, read once and reused for dp / dv / dqw
-        b_v = tl.load(
-            tl.multiple_of(p_v[:, None] + (i_n * D + o_d[None, :]), (1, 16)),
-            mask=m_v,
-            other=0.0,
-        ).to(tl.float32)
+        b_v = tl.load( tl.multiple_of(p_v[:, None] + (i_n * D + o_d[None, :]), (1, 16)), mask=m_v, other=0.0, ).to(tl.float32)
 
         # [BL]; recompute probs from logit + lse, OOB rows masked to 0
         b_rstd = tl.load(rstd + i_n + (i_l * BL + tl.arange(0, BL)) * N, mask=(i_l * BL + tl.arange(0, BL)) < L, other=0).to(tl.float32)
@@ -231,11 +218,7 @@ def attnres_bwd_kernel_dv(
         # [BL, BD]
         b_k = b_v * b_rstd[:, None]
         b_dv = b_p[:, None] * b_do[None, :] + (b_ds * b_rstd)[:, None] * (b_qw[None, :] - b_k * (b_logit / D)[:, None])
-        tl.store(
-            tl.multiple_of(p_dv[:, None] + (i_n * D + o_d[None, :]), (1, 16)),
-            b_dv.to(dres[0].dtype.element_ty),
-            mask=m_v,
-        )
+        tl.store( tl.multiple_of(p_dv[:, None] + (i_n * D + o_d[None, :]), (1, 16)), b_dv.to(dres[0].dtype.element_ty), mask=m_v, )
         # [BD]
         b_dqw += tl.sum(b_ds[:, None] * b_k, axis=0)
 

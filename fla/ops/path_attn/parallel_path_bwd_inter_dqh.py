@@ -91,6 +91,7 @@ def parallel_path_bwd_dq_kernel(
     b_delta = tl.load(D + (i_t * BT + tl.arange(0, BT)) * HQ, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0)
 
     if USE_GATE:
+        pass
         b_g_cumsum_q = tl.load(g_cumsum + (i_t * BT + tl.arange(0, BT)) * HQ, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0).to(tl.float32)
         b_dg_cumsum_q = tl.zeros([BT], dtype=tl.float32)
     else:
@@ -117,6 +118,7 @@ def parallel_path_bwd_dq_kernel(
             b_k = desc_k.load([offset, 0])
             b_A = tl.dot(b_q, tl.trans(b_k).to(b_q.dtype))
             if USE_GATE:
+                pass
                 b_g_cumsum_k = tl.load(g_cumsum + (offset + tl.arange(0, BS)) * HQ, mask=(offset + tl.arange(0, BS)) < T, other=0).to(tl.float32)
                 b_A = b_A + b_g_cumsum_q[:, None] - b_g_cumsum_k[None, :]
             b_A = exp2(b_A * sm_scale - b_l[:, None])

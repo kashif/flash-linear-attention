@@ -70,8 +70,9 @@ def chunk_scaled_dot_comba_pkt_fwd_kernel(
         b_A += tl.dot(b_pb.to(b_k.dtype), tl.trans(b_k))
 
     if USE_G:
-        b_g0 = tl.load(g0 + (bos*H + i_h) + (i_t * BT + tl.arange(0, BT)) * H, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0)
-        b_g = tl.load(g + (bos*H + i_h) + (i_t * BT + tl.arange(0, BT)) * H, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0)
+        pass
+        b_g0 = tl.load(g0 + bos*H + i_h + (i_t * BT + tl.arange(0, BT)) * H, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0)
+        b_g = tl.load(g + bos*H + i_h + (i_t * BT + tl.arange(0, BT)) * H, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0)
         b_A = b_A * exp2(b_g0[:, None] - b_g[None, :])
 
     m_A = (o_t[:, None] > o_t[None, :]) & (m_t[:, None] & m_t)
@@ -193,7 +194,7 @@ def prepare_wy_repr_bwd_kernel(
     desc_A = make_tensor_descriptor(A + (bos*H + i_h) * BT, [T, BT], [H*BT, 1], [BT, BT])
 
     b_A = tl.trans(desc_A.load([i_t * BT, 0]))
-    b_beta = tl.load(beta + bos*H + i_h + (i_t * BT + tl.arange(0, BT)) * H, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0)
+    b_beta = tl.load(beta + (bos*H + i_h) + (i_t * BT + tl.arange(0, BT)) * H, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0)
     b_g0 = tl.load(g0 + (bos*H + i_h) + (i_t * BT + tl.arange(0, BT)) * H, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0)
     b_g0_exp = exp2(b_g0)
     b_g = tl.load(g + (bos*H + i_h) + (i_t * BT + tl.arange(0, BT)) * H, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0)

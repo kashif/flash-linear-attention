@@ -85,19 +85,19 @@ def causal_conv1d_fwd_kernel(
 
     b_y = tl.zeros((BT, BD), dtype=tl.float32)
     if not USE_INITIAL_STATE:
-        desc_x = make_tensor_descriptor(p_x, [T, D], [stride_x_t, stride_x_d], [BT, BD])
         for i_w in tl.static_range(-W + 1, 1):
+            desc_yi = make_tensor_descriptor(p_x, [T, D], [stride_x_t, stride_x_d], [BT, BD])
             # [BT, BD]
-            b_yi = desc_x.load([i_t * BT + i_w, i_d * BD]).to(tl.float32)
+            b_yi = desc_yi.load([i_t * BT + i_w, i_d * BD]).to(tl.float32)
             if HAS_WEIGHT:
                 b_yi *= tl.sum(b_w * (o_w == (i_w + W - 1)), 1)
             b_y += b_yi
     elif i_t * BT >= W:
         # to make Triton compiler happy, we need to copy codes
-        desc_x = make_tensor_descriptor(p_x, [T, D], [stride_x_t, stride_x_d], [BT, BD])
         for i_w in tl.static_range(-W + 1, 1):
+            desc_yi = make_tensor_descriptor(p_x, [T, D], [stride_x_t, stride_x_d], [BT, BD])
             # [BT, BD]
-            b_yi = desc_x.load([i_t * BT + i_w, i_d * BD]).to(tl.float32)
+            b_yi = desc_yi.load([i_t * BT + i_w, i_d * BD]).to(tl.float32)
             if HAS_WEIGHT:
                 b_yi *= tl.sum(b_w * (o_w == (i_w + W - 1)), 1)
             b_y += b_yi
@@ -108,11 +108,7 @@ def causal_conv1d_fwd_kernel(
             m_x = ((o_x >= 0) & (o_x < T))[:, None] & m_d
             m_c = ((o_x + W >= 0) & (o_x < 0))[:, None] & m_d
 
-            b_yi = tl.load(
-                p_x + o_x[:, None] * stride_x_t + o_d * stride_x_d,
-                mask=m_x,
-                other=0
-            ).to(tl.float32)
+            b_yi = tl.load( p_x + o_x[:, None] * stride_x_t + o_d * stride_x_d, mask=m_x, other=0 ).to(tl.float32)
 
             b_yi += tl.load(initial_state + i_n * D*W + o_d * W + (o_x + W)[:, None], mask=m_c, other=0).to(tl.float32)
 
@@ -128,7 +124,8 @@ def causal_conv1d_fwd_kernel(
 
     if HAS_RESIDUAL:
         desc_residual = make_tensor_descriptor(residual + bos * D, [T, D], [D, 1], [BT, BD])
-        b_y += desc_residual.load([i_t * BT, i_d * BD])
+        b_residual = desc_residual.load([i_t * BT, i_d * BD])
+        b_y += b_residual
 
     desc_y = make_tensor_descriptor(y + bos * D, [T, D], [D, 1], [BT, BD])
     desc_y.store([i_t * BT, i_d * BD], tl.cast(b_y, dtype=desc_y.dtype, fp_downcast_rounding='rtne'))
@@ -220,15 +217,13 @@ def causal_conv1d_bwd_kernel(
     if HAS_BIAS:
         b_db = tl.zeros((BD,), dtype=tl.float32)
 
-    desc_dy = make_tensor_descriptor(p_dy, [T, D], [stride_dy_t, stride_dy_d], [BT, BD])
-    if ACTIVATION == 'swish' or ACTIVATION == 'silu':
-        desc_y = make_tensor_descriptor(y + bos * D, [T, D], [D, 1], [BT, BD])
-
     if not USE_FINAL_STATE and not USE_INITIAL_STATE:
         for i_w in tl.static_range(0, W):
+            desc_dy_blk = make_tensor_descriptor(p_dy, [T, D], [stride_dy_t, stride_dy_d], [BT, BD])
             # [BT, BD]
-            b_dy = desc_dy.load([i_t * BT + i_w, i_d * BD]).to(tl.float32)
+            b_dy = desc_dy_blk.load([i_t * BT + i_w, i_d * BD]).to(tl.float32)
             if ACTIVATION == 'swish' or ACTIVATION == 'silu':
+                desc_y = make_tensor_descriptor(y + bos * D, [T, D], [D, 1], [BT, BD])
                 b_y = desc_y.load([i_t * BT + i_w, i_d * BD]).to(tl.float32)
                 b_ys = tl.sigmoid(b_y)
                 b_dy = b_dy * b_ys * (1 + b_y * (1 - b_ys))
@@ -245,9 +240,11 @@ def causal_conv1d_bwd_kernel(
     elif i_t * BT >= W:
         # to make Triton compiler happy, we need to copy codes
         for i_w in tl.static_range(0, W):
+            desc_dy_blk = make_tensor_descriptor(p_dy, [T, D], [stride_dy_t, stride_dy_d], [BT, BD])
             # [BT, BD]
-            b_dy = desc_dy.load([i_t * BT + i_w, i_d * BD]).to(tl.float32)
+            b_dy = desc_dy_blk.load([i_t * BT + i_w, i_d * BD]).to(tl.float32)
             if ACTIVATION == 'swish' or ACTIVATION == 'silu':
+                desc_y = make_tensor_descriptor(y + bos * D, [T, D], [D, 1], [BT, BD])
                 b_y = desc_y.load([i_t * BT + i_w, i_d * BD]).to(tl.float32)
                 b_ys = tl.sigmoid(b_y)
                 b_dy = b_dy * b_ys * (1 + b_y * (1 - b_ys))
@@ -265,8 +262,10 @@ def causal_conv1d_bwd_kernel(
         # which may use initial state
         o_t = i_t * BT + tl.arange(0, BT)
         for i_w in tl.static_range(0, W):
-            b_dy_shift = desc_dy.load([i_t * BT + i_w, i_d * BD]).to(tl.float32)
+            desc_dy_blk = make_tensor_descriptor(p_dy, [T, D], [stride_dy_t, stride_dy_d], [BT, BD])
+            b_dy_shift = desc_dy_blk.load([i_t * BT + i_w, i_d * BD]).to(tl.float32)
             if ACTIVATION == 'swish' or ACTIVATION == 'silu':
+                desc_y = make_tensor_descriptor(y + bos * D, [T, D], [D, 1], [BT, BD])
                 b_y_shift = desc_y.load([i_t * BT + i_w, i_d * BD]).to(tl.float32)
                 b_ys = tl.sigmoid(b_y_shift)
                 b_dy_shift = b_dy_shift * b_ys * (1 + b_y_shift * (1 - b_ys))
@@ -277,19 +276,16 @@ def causal_conv1d_bwd_kernel(
                 if USE_INITIAL_STATE:
                     mask_head_rows = (o_t < i_w) & (o_t < T)
                     # dy_head = dy[t]
-                    b_dy_head = tl.load(p_dy + o_t[:, None] * stride_dy_t + o_d * stride_dy_d, mask=(mask_head_rows[:, None] & m_d[None, :]),
-                                        other=0.0).to(tl.float32)
+                    b_dy_head = tl.load(p_dy + o_t[:, None] * stride_dy_t + o_d * stride_dy_d, mask=(mask_head_rows[:, None] & m_d[None, :]), other=0.0).to(tl.float32)
                     if ACTIVATION == 'swish' or ACTIVATION == 'silu':
                         # use y[t] （not y[t+i_w]）
-                        b_y_head = tl.load(y + bos * D + o_t[:, None] * D + o_d,
-                                           mask=(mask_head_rows[:, None] & m_d[None, :]), other=0.0).to(tl.float32)
+                        b_y_head = tl.load(y + bos * D + o_t[:, None] * D + o_d, mask=(mask_head_rows[:, None] & m_d[None, :]), other=0.0).to(tl.float32)
                         b_ys_head = tl.sigmoid(b_y_head)
                         b_dy_head = b_dy_head * b_ys_head * (1 + b_y_head * (1 - b_ys_head))
                     o_c = W - i_w + o_t
                     # index 0 is padding 0
                     mask_c = (mask_head_rows & (o_c >= 1) & (o_c < W))
-                    b_xc = tl.load(initial_state + i_n * D * W + o_d[None, :] * W + o_c[:, None],
-                                   mask=(mask_c[:, None] & m_d[None, :]), other=0.0).to(tl.float32)
+                    b_xc = tl.load(initial_state + i_n * D * W + o_d[None, :] * W + o_c[:, None], mask=(mask_c[:, None] & m_d[None, :]), other=0.0).to(tl.float32)
                     # add the gradient comes from initial_state
                     b_dw += tl.sum(b_dy_head * b_xc, 0)
                 tl.store(dw + i_tg * D * W + o_d * W + W - i_w - 1, b_dw.to(dw.dtype.element_ty), mask=m_d)
@@ -375,8 +371,8 @@ def causal_conv1d_update_kernel(
 
     if USE_INITIAL_STATE:
         # 2. Shift Cache (Read [1:])
-        desc_cache = make_tensor_descriptor(cache + i_n * D*W, [D, W], [W, 1], [BD, BW])
-        b_cache = desc_cache.load([i_d * BD, 1]).to(tl.float32)
+        p_cache_read = tl.make_block_ptr( cache + i_n * D*W, shape=(D, W), strides=(W, 1), offsets=(i_d * BD, 1), block_shape=(BD, BW), order=(1, 0) )
+        b_cache = tl.load(p_cache_read, boundary_check=(0, 1)).to(tl.float32)
 
         # 3. Fill x to the last position
         m_update = o_w == (W - 1)
@@ -397,12 +393,11 @@ def causal_conv1d_update_kernel(
     if HAS_RESIDUAL:
         b_y += tl.load(residual + i_n * D + o_d, mask=m_d, other=0)
 
-    tl.store(y + i_n * stride_y_n + o_d * stride_y_d, tl.cast(b_y,
-             dtype=y.dtype.element_ty, fp_downcast_rounding='rtne'), mask=m_d)
+    tl.store(y + i_n * stride_y_n + o_d * stride_y_d, tl.cast(b_y, dtype=y.dtype.element_ty, fp_downcast_rounding='rtne'), mask=m_d)
 
     if USE_INITIAL_STATE:
-        desc_cache.store([i_d * BD, 0], tl.cast(b_cache, dtype=desc_cache.dtype,
-                         fp_downcast_rounding='rtne'))
+        p_cache_write = tl.make_block_ptr( cache + i_n * D*W, shape=(D, W), strides=(W, 1), offsets=(i_d * BD, 0), block_shape=(BD, BW), order=(1, 0) )
+        tl.store(p_cache_write, tl.cast(b_cache, dtype=cache.dtype.element_ty, fp_downcast_rounding='rtne'), boundary_check=(0, 1))
 
 
 @triton.heuristics({

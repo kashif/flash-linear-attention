@@ -66,7 +66,7 @@ def recompute_w_u_fwd_kernel(
         T = eos - bos
     else:
         bos, eos = i_b * T, i_b * T + T
-    b_b = tl.load(beta + (bos*HV + i_h) + (i_t * BT + tl.arange(0, BT)) * HV, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0)
+    b_b = tl.load(beta + bos*HV + i_h + (i_t * BT + tl.arange(0, BT)) * HV, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0)
 
     desc_A = make_tensor_descriptor(A + (bos*HV + i_h) * BT, [T, BT], [HV*BT, 1], [BT, BT])
     b_A = desc_A.load([i_t * BT, 0])
@@ -80,6 +80,7 @@ def recompute_w_u_fwd_kernel(
         desc_u.store([i_t * BT, i_v * BV], b_u.to(desc_u.dtype))
 
     if USE_G:
+        pass
         b_g = exp2(tl.load(g + (bos*HV + i_h) + (i_t * BT + tl.arange(0, BT)) * HV, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0))
 
     for i_k in range(tl.cdiv(K, BK)):
@@ -149,6 +150,7 @@ def prepare_wy_repr_bwd_kernel(
     b_dA = tl.zeros([BT, BT], dtype=tl.float32)
 
     if USE_G:
+        pass
         b_g = tl.load(g + (bos*HV + i_h) + (i_t * BT + tl.arange(0, BT)) * HV, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0)
         b_g_exp = exp2(b_g)
         b_dg = tl.zeros([BT], dtype=tl.float32)

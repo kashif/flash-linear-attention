@@ -156,6 +156,7 @@ def parallel_wall_attn_fwd_kernel(
     b_acc = tl.zeros([BT], dtype=tl.float32)
 
     if USE_SCALAR_G:
+        pass
         b_cq = tl.load(g_scalar_cumsum + bos * HQ + i_hq + (i_t * BT + tl.arange(0, BT)) * HQ, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0).to(tl.float32)
 
     if USE_SINK_BIAS:
@@ -247,7 +248,7 @@ def parallel_wall_attn_fwd_kernel(
     b_m += log2(b_acc)
     desc_o.store([i_t * BT, i_v * BV], b_o.to(desc_o.dtype))
     if i_v == 0:
-        tl.store(lse + bos * HQ + i_hq + (i_t * BT + tl.arange(0, BS)) * HQ, b_m.to((lse + bos * HQ + i_hq).dtype.element_ty), mask=(i_t * BT + tl.arange(0, BS)) < T)
+        tl.store(lse + bos * HQ + i_hq + (i_t * BT + tl.arange(0, BT)) * HQ, b_m.to((lse + bos * HQ + i_hq).dtype.element_ty), mask=(i_t * BT + tl.arange(0, BT)) < T)
 
 
 @triton.autotune(
@@ -328,12 +329,13 @@ def parallel_wall_attn_bwd_kernel_dq(
     b_q_til = (b_q.to(tl.float32) * exp2(b_pq - b_R)).to(b_q.dtype)
 
     b_do = desc_do.load([i_t * BT, i_v * BV])
-    b_lse = tl.load(lse + bos * HQ + i_hq + (i_t * BT + tl.arange(0, BS)) * HQ, mask=(i_t * BT + tl.arange(0, BS)) < T, other=0)
-    b_delta = tl.load(delta + bos * HQ + i_hq + (i_t * BT + tl.arange(0, BS)) * HQ, mask=(i_t * BT + tl.arange(0, BS)) < T, other=0)
+    b_lse = tl.load(lse + bos * HQ + i_hq + (i_t * BT + tl.arange(0, BT)) * HQ, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0)
+    b_delta = tl.load(delta + bos * HQ + i_hq + (i_t * BT + tl.arange(0, BT)) * HQ, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0)
 
     b_dq_til = tl.zeros([BT, BK], dtype=tl.float32)
 
     if USE_SCALAR_G:
+        pass
         b_cq = tl.load(g_scalar_cumsum + bos * HQ + i_hq + (i_t * BT + tl.arange(0, BT)) * HQ, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0).to(tl.float32)
         b_dc = tl.zeros([BT], dtype=tl.float32)
 
@@ -425,6 +427,7 @@ def parallel_wall_attn_bwd_kernel_dq(
     desc_dq.store([i_t * BT, 0], b_dq.to(desc_dq.dtype))
     desc_dg.store([i_t * BT, 0], b_dg.to(desc_dg.dtype))
     if USE_SCALAR_G:
+        pass
         tl.store(dg_scalar_cumsum + bos * HQ + i_hq + (i_t * BT + tl.arange(0, BT)) * HQ, b_dc.to((dg_scalar_cumsum + bos * HQ + i_hq).dtype.element_ty), mask=(i_t * BT + tl.arange(0, BT)) < T)
 
 
@@ -510,6 +513,7 @@ def parallel_wall_attn_bwd_kernel_dkv(
     o_k = i_t * BT + tl.arange(0, BT)
 
     if USE_SCALAR_G:
+        pass
         b_ck = tl.load(g_scalar_cumsum + bos * HQ + i_hq + (i_t * BT + tl.arange(0, BT)) * HQ, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0).to(tl.float32)
         b_dc = tl.zeros([BT], dtype=tl.float32)
 
@@ -611,6 +615,7 @@ def parallel_wall_attn_bwd_kernel_dkv(
     desc_dv.store([i_t * BT, i_v * BV], b_dv.to(desc_dv.dtype))
     desc_dg.store([i_t * BT, 0], b_dg.to(desc_dg.dtype))
     if USE_SCALAR_G:
+        pass
         tl.store(dg_scalar_cumsum + bos * HQ + i_hq + (i_t * BT + tl.arange(0, BT)) * HQ, b_dc.to((dg_scalar_cumsum + bos * HQ + i_hq).dtype.element_ty), mask=(i_t * BT + tl.arange(0, BT)) < T)
 
 

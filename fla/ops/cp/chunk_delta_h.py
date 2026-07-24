@@ -391,7 +391,7 @@ def merge_fwd_bwd_kernel(
             desc_he = make_tensor_descriptor(ag_hm + base, [K, V], [V + K, 1], [BK, BV])
             b_he = desc_he.load([0, i_v * BV]).to(tl.float32)
             desc_m = make_tensor_descriptor(ag_hm + base + V, [K, K], [V + K, 1], [BK, BK])
-            b_m = desc_m.load([0, i_k_col * BLOCK_SIZE]).to(tl.float32)
+            b_m = desc_m.load([0, 0]).to(tl.float32)
             if STATE_V_FIRST:
                 # h_T' = h_T @ M^T + he^T
                 b_h = tl.dot(b_h.to(tl.float32), tl.trans(b_m)) + tl.trans(b_he)

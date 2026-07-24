@@ -88,7 +88,7 @@ def gdn_gate_chunk_cumsum_scalar_kernel(
         bos, eos = i_b * T, i_b * T + T
 
 
-    b_g = tl.load(g + i_h + (i_t * BT + tl.arange(0, BT)) * H, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0).to(tl.float32)
+    b_g = tl.load(g + bos * H + i_h + (i_t * BT + tl.arange(0, BT)) * H, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0).to(tl.float32)
     if HAS_BIAS:
         b_g = b_g + tl.load(dt_bias + i_h).to(tl.float32)
     b_A = tl.load(A_log + i_h).to(tl.float32)

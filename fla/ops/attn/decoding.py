@@ -70,6 +70,7 @@ def naive_attn_decoding_kernel(
     b_acc = tl.zeros([1], dtype=tl.float32)
 
     if USE_G:
+        pass
         b_gq = tl.load(g_cumsum + bos * HQ + i_hq + (T-1 + tl.arange(0, 1)) * HQ, mask=(T-1 + tl.arange(0, 1)) < T, other=0).to(tl.float32)
     else:
         b_gq = None
@@ -93,6 +94,7 @@ def naive_attn_decoding_kernel(
         b_s = tl.where(mask, b_s, float('-inf'))
 
         if USE_G:
+            pass
             b_gk = tl.load(g_cumsum + bos * HQ + i_hq + (i_s + tl.arange(0, BS)) * HQ, mask=(i_s + tl.arange(0, BS)) < T, other=0).to(tl.float32)
             b_s += b_gq - b_gk
         # [BT, BS]

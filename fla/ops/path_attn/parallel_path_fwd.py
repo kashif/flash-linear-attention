@@ -70,6 +70,7 @@ def parallel_path_fwd_kernel(
     b_m = tl.load(M + bos * HQ + i_hq + (i_t * BT + tl.arange(0, BT)) * HQ, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0)
 
     if USE_GATE:
+        pass
         b_g_cumsum_q = tl.load(g_cumsum + bos * HQ + i_hq + (i_t * BT + tl.arange(0, BT)) * HQ, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0)
     else:
         b_g_cumsum_q = None
@@ -92,6 +93,7 @@ def parallel_path_fwd_kernel(
         b_s = tl.dot(b_q.to(b_k.dtype), b_k)
 
         if USE_GATE:
+            pass
             b_g_cumsum_k = tl.load(g_cumsum + (bos * HQ + i_hq) + (offset + tl.arange(0, BS)) * HQ, mask=(offset + tl.arange(0, BS)) < T, other=0)
             b_s = b_s + b_g_cumsum_q[:, None] - b_g_cumsum_k[None, :]
         b_s = tl.where(m_s[:, None], b_s * sm_scale, float("-inf"))
@@ -122,6 +124,7 @@ def parallel_path_fwd_kernel(
         # [BT, BS]
         b_s = tl.dot(b_q.to(b_k.dtype), b_k)
         if USE_GATE:
+            pass
             b_g_cumsum_k = tl.load(g_cumsum + (bos * HQ + i_hq) + (offset + tl.arange(0, BS)) * HQ, mask=(offset + tl.arange(0, BS)) < T, other=0)
             b_s = b_s + b_g_cumsum_q[:, None] - b_g_cumsum_k[None, :]
         b_s = b_s * sm_scale

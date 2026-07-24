@@ -386,23 +386,16 @@ def layer_norm_bwd_kernel(
     # the last program's range may slightly exceed Tg (since BS = cdiv(T, NS));
     # boundary_check handles the partial tail tile, m_t < Tg masks dw/db accumulation.
     Tg = T // G
-    desc_x = make_tensor_descriptor(x + i_g * D, [Tg, D], [G*D, 1], [BT, BD])
-    desc_dy = make_tensor_descriptor(dy + i_g * D, [Tg, D], [G*D, 1], [BT, BD])
-    desc_dx = make_tensor_descriptor(dx + i_g * D, [Tg, D], [G*D, 1], [BT, BD])
-    if not IS_RMS_NORM:
-        pass
-    if RECOMPUTE_OUTPUT:
-        desc_y = make_tensor_descriptor(y + i_g * D, [Tg, D], [G*D, 1], [BT, BD])
-    if HAS_DRESIDUAL:
-        desc_dres = make_tensor_descriptor(dres + i_g * D, [Tg, D], [G*D, 1], [BT, BD])
-    if STORE_DRESIDUAL:
-        desc_dres_in = make_tensor_descriptor(dres_in + i_g * D, [Tg, D], [G*D, 1], [BT, BD])
     for i_t in range(i_sg * BS, i_sg * BS + BS, BT):
+        desc_x = make_tensor_descriptor(x + i_g * D, [Tg, D], [G*D, 1], [BT, BD])
+        desc_dy = make_tensor_descriptor(dy + i_g * D, [Tg, D], [G*D, 1], [BT, BD])
+        desc_dx = make_tensor_descriptor(dx + i_g * D, [Tg, D], [G*D, 1], [BT, BD])
         # [BT, BD]
         b_x = desc_x.load([i_t, 0]).to(tl.float32)
         b_dy = desc_dy.load([i_t, 0]).to(tl.float32)
 
         if not IS_RMS_NORM:
+            pass
             b_mean = tl.load(mean + i_g + (i_t + tl.arange(0, BT)) * G, mask=(i_t + tl.arange(0, BT)) < Tg, other=0)
         b_rstd = tl.load(rstd + i_g + (i_t + tl.arange(0, BT)) * G, mask=(i_t + tl.arange(0, BT)) < Tg, other=0)
         # Compute dx
@@ -413,6 +406,7 @@ def layer_norm_bwd_kernel(
         if HAS_BIAS:
             b_y = b_y + b_b[None, :]
         if RECOMPUTE_OUTPUT:
+            desc_y = make_tensor_descriptor(y + i_g * D, [Tg, D], [G*D, 1], [BT, BD])
             desc_y.store([i_t, 0], b_y.to(desc_y.dtype))
 
         b_wdy = b_dy
@@ -434,10 +428,12 @@ def layer_norm_bwd_kernel(
             b_c1 = tl.sum(b_xhat * b_wdy, axis=1) / D
             b_dx = (b_wdy - b_xhat * b_c1[:, None]) * b_rstd[:, None]
         if HAS_DRESIDUAL:
+            desc_dres = make_tensor_descriptor(dres + i_g * D, [Tg, D], [G*D, 1], [BT, BD])
             b_dres = desc_dres.load([i_t, 0]).to(tl.float32)
             b_dx += b_dres
         # Write dx
         if STORE_DRESIDUAL:
+            desc_dres_in = make_tensor_descriptor(dres_in + i_g * D, [Tg, D], [G*D, 1], [BT, BD])
             desc_dres_in.store([i_t, 0], b_dx.to(desc_dres_in.dtype))
 
         desc_dx.store([i_t, 0], b_dx.to(desc_dx.dtype))

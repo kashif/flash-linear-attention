@@ -126,8 +126,7 @@ def chunk_gated_delta_product_fwd_kernel_h_blockdim64(
                 desc_h4.store([192, i_v * BV], b_h4.to(desc_h4.dtype))
 
         desc_v = make_tensor_descriptor(v, [T, V], [stride_v, 1], [BT, BV])
-        p_v_new = tl.make_block_ptr(v_new, (T, V), (stride_v, 1), (i_t * BT, i_v * BV),
-                                    (BT, BV), (1, 0)) if SAVE_NEW_VALUE else None
+        p_v_new = tl.make_block_ptr(v_new, (T, V), (stride_v, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0)) if SAVE_NEW_VALUE else None
         b_v_new = tl.zeros([BT, BV], dtype=tl.float32)
         desc_w = make_tensor_descriptor(w, [T, K], [stride_k, 1], [BT, 64])
         b_w = desc_w.load([i_t * BT, 0])

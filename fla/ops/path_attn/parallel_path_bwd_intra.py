@@ -78,6 +78,7 @@ def parallel_path_bwd_intra_chunk_kernel(
     b_q = desc_q.load([i_t * BT, 0])
 
     if USE_GATE:
+        pass
         b_gq_cumsum = tl.load(g_cumsum + (i_t * BT + tl.arange(0, BT)) * HQ, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0)
         b_dgq = tl.zeros([BT], dtype=tl.float32)
     else:
@@ -101,6 +102,7 @@ def parallel_path_bwd_intra_chunk_kernel(
         b_q2 = b_q_tmp.to(b_k.dtype)
         b_A = tl.dot(b_q2, tl.trans(b_k))
         if USE_GATE:
+            pass
             b_gk_cumsum = tl.load(g_cumsum + (offset + tl.arange(0, BT)) * HQ, mask=(offset + tl.arange(0, BT)) < T, other=0)
             b_A = b_A + b_gq_cumsum[:, None] - b_gk_cumsum[None, :]
             b_A = tl.where((i_t * BT + tl.arange(0, BT) < T)[:, None], b_A, float("-inf"))  # avoid nan

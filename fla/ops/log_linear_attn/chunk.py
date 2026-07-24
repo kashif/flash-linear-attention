@@ -127,124 +127,40 @@ def chunkwise_fwd_kernel(
         first_chunk_index = offset // BT
 
         if KV_0_CREATED and (first_chunk_index & 1 > 0):
-            p_kv_0 = tl.make_block_ptr(
-                h0 + ((i_n * L_IN + 0) * H + i_h) * K * V,
-                (K, V),
-                (V, 1),
-                (i_k * BK, 0),
-                (BK, V),
-                (1, 0),
-            )
+            p_kv_0 = tl.make_block_ptr( h0 + ((i_n * L_IN + 0) * H + i_h) * K * V, (K, V), (V, 1), (i_k * BK, 0), (BK, V), (1, 0), )
             kv_0 = tl.load(p_kv_0, boundary_check=(0, 1))
         if KV_1_CREATED and (first_chunk_index & 2 > 0):
-            p_kv_1 = tl.make_block_ptr(
-                h0 + ((i_n * L_IN + 1) * H + i_h) * K * V,
-                (K, V),
-                (V, 1),
-                (i_k * BK, 0),
-                (BK, V),
-                (1, 0),
-            )
+            p_kv_1 = tl.make_block_ptr( h0 + ((i_n * L_IN + 1) * H + i_h) * K * V, (K, V), (V, 1), (i_k * BK, 0), (BK, V), (1, 0), )
             kv_1 = tl.load(p_kv_1, boundary_check=(0, 1))
         if KV_2_CREATED and (first_chunk_index & 4 > 0):
-            p_kv_2 = tl.make_block_ptr(
-                h0 + ((i_n * L_IN + 2) * H + i_h) * K * V,
-                (K, V),
-                (V, 1),
-                (i_k * BK, 0),
-                (BK, V),
-                (1, 0),
-            )
+            p_kv_2 = tl.make_block_ptr( h0 + ((i_n * L_IN + 2) * H + i_h) * K * V, (K, V), (V, 1), (i_k * BK, 0), (BK, V), (1, 0), )
             kv_2 = tl.load(p_kv_2, boundary_check=(0, 1))
         if KV_3_CREATED and (first_chunk_index & 8 > 0):
-            p_kv_3 = tl.make_block_ptr(
-                h0 + ((i_n * L_IN + 3) * H + i_h) * K * V,
-                (K, V),
-                (V, 1),
-                (i_k * BK, 0),
-                (BK, V),
-                (1, 0),
-            )
+            p_kv_3 = tl.make_block_ptr( h0 + ((i_n * L_IN + 3) * H + i_h) * K * V, (K, V), (V, 1), (i_k * BK, 0), (BK, V), (1, 0), )
             kv_3 = tl.load(p_kv_3, boundary_check=(0, 1))
         if KV_4_CREATED and (first_chunk_index & 16 > 0):
-            p_kv_4 = tl.make_block_ptr(
-                h0 + ((i_n * L_IN + 4) * H + i_h) * K * V,
-                (K, V),
-                (V, 1),
-                (i_k * BK, 0),
-                (BK, V),
-                (1, 0),
-            )
+            p_kv_4 = tl.make_block_ptr( h0 + ((i_n * L_IN + 4) * H + i_h) * K * V, (K, V), (V, 1), (i_k * BK, 0), (BK, V), (1, 0), )
             kv_4 = tl.load(p_kv_4, boundary_check=(0, 1))
         if KV_5_CREATED and (first_chunk_index & 32 > 0):
-            p_kv_5 = tl.make_block_ptr(
-                h0 + ((i_n * L_IN + 5) * H + i_h) * K * V,
-                (K, V),
-                (V, 1),
-                (i_k * BK, 0),
-                (BK, V),
-                (1, 0),
-            )
+            p_kv_5 = tl.make_block_ptr( h0 + ((i_n * L_IN + 5) * H + i_h) * K * V, (K, V), (V, 1), (i_k * BK, 0), (BK, V), (1, 0), )
             kv_5 = tl.load(p_kv_5, boundary_check=(0, 1))
         if KV_6_CREATED and (first_chunk_index & 64 > 0):
-            p_kv_6 = tl.make_block_ptr(
-                h0 + ((i_n * L_IN + 6) * H + i_h) * K * V,
-                (K, V),
-                (V, 1),
-                (i_k * BK, 0),
-                (BK, V),
-                (1, 0),
-            )
+            p_kv_6 = tl.make_block_ptr( h0 + ((i_n * L_IN + 6) * H + i_h) * K * V, (K, V), (V, 1), (i_k * BK, 0), (BK, V), (1, 0), )
             kv_6 = tl.load(p_kv_6, boundary_check=(0, 1))
         if KV_7_CREATED and (first_chunk_index & 128 > 0):
-            p_kv_7 = tl.make_block_ptr(
-                h0 + ((i_n * L_IN + 7) * H + i_h) * K * V,
-                (K, V),
-                (V, 1),
-                (i_k * BK, 0),
-                (BK, V),
-                (1, 0),
-            )
+            p_kv_7 = tl.make_block_ptr( h0 + ((i_n * L_IN + 7) * H + i_h) * K * V, (K, V), (V, 1), (i_k * BK, 0), (BK, V), (1, 0), )
             kv_7 = tl.load(p_kv_7, boundary_check=(0, 1))
         if KV_8_CREATED and (first_chunk_index & 256 > 0):
-            p_kv_8 = tl.make_block_ptr(
-                h0 + ((i_n * L_IN + 8) * H + i_h) * K * V,
-                (K, V),
-                (V, 1),
-                (i_k * BK, 0),
-                (BK, V),
-                (1, 0),
-            )
+            p_kv_8 = tl.make_block_ptr( h0 + ((i_n * L_IN + 8) * H + i_h) * K * V, (K, V), (V, 1), (i_k * BK, 0), (BK, V), (1, 0), )
             kv_8 = tl.load(p_kv_8, boundary_check=(0, 1))
         if KV_9_CREATED and (first_chunk_index & 512 > 0):
-            p_kv_9 = tl.make_block_ptr(
-                h0 + ((i_n * L_IN + 9) * H + i_h) * K * V,
-                (K, V),
-                (V, 1),
-                (i_k * BK, 0),
-                (BK, V),
-                (1, 0),
-            )
+            p_kv_9 = tl.make_block_ptr( h0 + ((i_n * L_IN + 9) * H + i_h) * K * V, (K, V), (V, 1), (i_k * BK, 0), (BK, V), (1, 0), )
             kv_9 = tl.load(p_kv_9, boundary_check=(0, 1))
         if KV_10_CREATED and (first_chunk_index & 1024 > 0):
-            p_kv_10 = tl.make_block_ptr(
-                h0 + ((i_n * L_IN + 10) * H + i_h) * K * V,
-                (K, V),
-                (V, 1),
-                (i_k * BK, 0),
-                (BK, V),
-                (1, 0),
-            )
+            p_kv_10 = tl.make_block_ptr( h0 + ((i_n * L_IN + 10) * H + i_h) * K * V, (K, V), (V, 1), (i_k * BK, 0), (BK, V), (1, 0), )
             kv_10 = tl.load(p_kv_10, boundary_check=(0, 1))
         if KV_11_CREATED and (first_chunk_index & 2048 > 0):
-            p_kv_11 = tl.make_block_ptr(
-                h0 + ((i_n * L_IN + 11) * H + i_h) * K * V,
-                (K, V),
-                (V, 1),
-                (i_k * BK, 0),
-                (BK, V),
-                (1, 0),
-            )
+            p_kv_11 = tl.make_block_ptr( h0 + ((i_n * L_IN + 11) * H + i_h) * K * V, (K, V), (V, 1), (i_k * BK, 0), (BK, V), (1, 0), )
             kv_11 = tl.load(p_kv_11, boundary_check=(0, 1))
 
     NT = tl.cdiv(T, BT)
@@ -253,28 +169,10 @@ def chunkwise_fwd_kernel(
         b_h_ptrs = level_scales + ((bos + i_t * BT + i_idx) * H + i_h) * L + b_llut
         b_h = tl.load(b_h_ptrs, mask=i_idx >= j_idx)
 
-        p_q = tl.make_block_ptr(
-            q + bos * K, (T, K), (K, 1), (i_t * BT, i_k * BK), (BT, BK), (1, 0),
-        )
-        p_k = tl.make_block_ptr(
-            k + bos * K, (K, T), (1, K), (i_k * BK, i_t * BT), (BK, BT), (0, 1),
-        )
-        p_v = tl.make_block_ptr(
-            v + (bos * H + i_h) * V,
-            (T, V),
-            (H * V, 1),
-            (i_t * BT, 0),
-            (BT, V),
-            (1, 0),
-        )
-        p_o = tl.make_block_ptr(
-            o + ((bos * H + i_h) * (K // BK) + i_k) * V,
-            (T, V),
-            (H * (K // BK) * V, 1),
-            (i_t * BT + output_offset, 0),
-            (BT, V),
-            (1, 0),
-        )
+        p_q = tl.make_block_ptr( q + bos * K, (T, K), (K, 1), (i_t * BT, i_k * BK), (BT, BK), (1, 0), )
+        p_k = tl.make_block_ptr( k + bos * K, (K, T), (1, K), (i_k * BK, i_t * BT), (BK, BT), (0, 1), )
+        p_v = tl.make_block_ptr( v + (bos * H + i_h) * V, (T, V), (H * V, 1), (i_t * BT, 0), (BT, V), (1, 0), )
+        p_o = tl.make_block_ptr( o + ((bos * H + i_h) * (K // BK) + i_k) * V, (T, V), (H * (K // BK) * V, 1), (i_t * BT + output_offset, 0), (BT, V), (1, 0), )
 
         b_g = tl.load(g + bos * H + i_h + (i_t * BT + tl.arange(0, BT)) * H, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0)
         b_q = tl.load(p_q, boundary_check=(0, 1))
@@ -295,146 +193,62 @@ def chunkwise_fwd_kernel(
 
         if MIN_LEVEL <= 0 and MAX_LEVEL >= 0:
             if chunk_index & 1:
-                p_l = tl.make_block_ptr(
-                    level_scales + (bos * H + i_h) * L,
-                    (T, L),
-                    (H * L, 1),
-                    (i_t * BT, num_intra_levels),
-                    (BT, 1),
-                    (1, 0),
-                )
+                p_l = tl.make_block_ptr( level_scales + (bos * H + i_h) * L, (T, L), (H * L, 1), (i_t * BT, num_intra_levels), (BT, 1), (1, 0), )
                 b_l = tl.load(p_l, boundary_check=(0, 1))
                 b_o += tl.dot((b_l * b_q), kv_0.to(b_q.dtype)) * tl.exp(b_g)[:, None]
         if MIN_LEVEL <= 1 and MAX_LEVEL >= 1:
             if chunk_index & 2:
-                p_l = tl.make_block_ptr(
-                    level_scales + (bos * H + i_h) * L,
-                    (T, L),
-                    (H * L, 1),
-                    (i_t * BT, num_intra_levels + 1),
-                    (BT, 1),
-                    (1, 0),
-                )
+                p_l = tl.make_block_ptr( level_scales + (bos * H + i_h) * L, (T, L), (H * L, 1), (i_t * BT, num_intra_levels + 1), (BT, 1), (1, 0), )
                 b_l = tl.load(p_l, boundary_check=(0, 1))
                 b_o += tl.dot((b_l * b_q), kv_1.to(b_q.dtype)) * tl.exp(b_g)[:, None]
         if MIN_LEVEL <= 2 and MAX_LEVEL >= 2:
             if chunk_index & 4:
-                p_l = tl.make_block_ptr(
-                    level_scales + (bos * H + i_h) * L,
-                    (T, L),
-                    (H * L, 1),
-                    (i_t * BT, num_intra_levels + 2),
-                    (BT, 1),
-                    (1, 0),
-                )
+                p_l = tl.make_block_ptr( level_scales + (bos * H + i_h) * L, (T, L), (H * L, 1), (i_t * BT, num_intra_levels + 2), (BT, 1), (1, 0), )
                 b_l = tl.load(p_l, boundary_check=(0, 1))
                 b_o += tl.dot((b_l * b_q), kv_2.to(b_q.dtype)) * tl.exp(b_g)[:, None]
         if MIN_LEVEL <= 3 and MAX_LEVEL >= 3:
             if chunk_index & 8:
-                p_l = tl.make_block_ptr(
-                    level_scales + (bos * H + i_h) * L,
-                    (T, L),
-                    (H * L, 1),
-                    (i_t * BT, num_intra_levels + 3),
-                    (BT, 1),
-                    (1, 0),
-                )
+                p_l = tl.make_block_ptr( level_scales + (bos * H + i_h) * L, (T, L), (H * L, 1), (i_t * BT, num_intra_levels + 3), (BT, 1), (1, 0), )
                 b_l = tl.load(p_l, boundary_check=(0, 1))
                 b_o += tl.dot((b_l * b_q), kv_3.to(b_q.dtype)) * tl.exp(b_g)[:, None]
         if MIN_LEVEL <= 4 and MAX_LEVEL >= 4:
             if chunk_index & 16:
-                p_l = tl.make_block_ptr(
-                    level_scales + (bos * H + i_h) * L,
-                    (T, L),
-                    (H * L, 1),
-                    (i_t * BT, num_intra_levels + 4),
-                    (BT, 1),
-                    (1, 0),
-                )
+                p_l = tl.make_block_ptr( level_scales + (bos * H + i_h) * L, (T, L), (H * L, 1), (i_t * BT, num_intra_levels + 4), (BT, 1), (1, 0), )
                 b_l = tl.load(p_l, boundary_check=(0, 1))
                 b_o += tl.dot((b_l * b_q), kv_4.to(b_q.dtype)) * tl.exp(b_g)[:, None]
         if MIN_LEVEL <= 5 and MAX_LEVEL >= 5:
             if chunk_index & 32:
-                p_l = tl.make_block_ptr(
-                    level_scales + (bos * H + i_h) * L,
-                    (T, L),
-                    (H * L, 1),
-                    (i_t * BT, num_intra_levels + 5),
-                    (BT, 1),
-                    (1, 0),
-                )
+                p_l = tl.make_block_ptr( level_scales + (bos * H + i_h) * L, (T, L), (H * L, 1), (i_t * BT, num_intra_levels + 5), (BT, 1), (1, 0), )
                 b_l = tl.load(p_l, boundary_check=(0, 1))
                 b_o += tl.dot((b_l * b_q), kv_5.to(b_q.dtype)) * tl.exp(b_g)[:, None]
         if MIN_LEVEL <= 6 and MAX_LEVEL >= 6:
             if chunk_index & 64:
-                p_l = tl.make_block_ptr(
-                    level_scales + (bos * H + i_h) * L,
-                    (T, L),
-                    (H * L, 1),
-                    (i_t * BT, num_intra_levels + 6),
-                    (BT, 1),
-                    (1, 0),
-                )
+                p_l = tl.make_block_ptr( level_scales + (bos * H + i_h) * L, (T, L), (H * L, 1), (i_t * BT, num_intra_levels + 6), (BT, 1), (1, 0), )
                 b_l = tl.load(p_l, boundary_check=(0, 1))
                 b_o += tl.dot((b_l * b_q), kv_6.to(b_q.dtype)) * tl.exp(b_g)[:, None]
         if MIN_LEVEL <= 7 and MAX_LEVEL >= 7:
             if chunk_index & 128:  # 8192 - 16384
-                p_l = tl.make_block_ptr(
-                    level_scales + (bos * H + i_h) * L,
-                    (T, L),
-                    (H * L, 1),
-                    (i_t * BT, num_intra_levels + 7),
-                    (BT, 1),
-                    (1, 0),
-                )
+                p_l = tl.make_block_ptr( level_scales + (bos * H + i_h) * L, (T, L), (H * L, 1), (i_t * BT, num_intra_levels + 7), (BT, 1), (1, 0), )
                 b_l = tl.load(p_l, boundary_check=(0, 1))
                 b_o += tl.dot((b_l * b_q), kv_7.to(b_q.dtype)) * tl.exp(b_g)[:, None]
         if MIN_LEVEL <= 8 and MAX_LEVEL >= 8:
             if chunk_index & 256:
-                p_l = tl.make_block_ptr(
-                    level_scales + (bos * H + i_h) * L,
-                    (T, L),
-                    (H * L, 1),
-                    (i_t * BT, num_intra_levels + 8),
-                    (BT, 1),
-                    (1, 0),
-                )
+                p_l = tl.make_block_ptr( level_scales + (bos * H + i_h) * L, (T, L), (H * L, 1), (i_t * BT, num_intra_levels + 8), (BT, 1), (1, 0), )
                 b_l = tl.load(p_l, boundary_check=(0, 1))
                 b_o += tl.dot((b_l * b_q), kv_8.to(b_q.dtype)) * tl.exp(b_g)[:, None]
         if MIN_LEVEL <= 9 and MAX_LEVEL >= 9:
             if chunk_index & 512:
-                p_l = tl.make_block_ptr(
-                    level_scales + (bos * H + i_h) * L,
-                    (T, L),
-                    (H * L, 1),
-                    (i_t * BT, num_intra_levels + 9),
-                    (BT, 1),
-                    (1, 0),
-                )
+                p_l = tl.make_block_ptr( level_scales + (bos * H + i_h) * L, (T, L), (H * L, 1), (i_t * BT, num_intra_levels + 9), (BT, 1), (1, 0), )
                 b_l = tl.load(p_l, boundary_check=(0, 1))
                 b_o += tl.dot((b_l * b_q), kv_9.to(b_q.dtype)) * tl.exp(b_g)[:, None]
         if MIN_LEVEL <= 10 and MAX_LEVEL >= 10:
             if chunk_index & 1024:
-                p_l = tl.make_block_ptr(
-                    level_scales + (bos * H + i_h) * L,
-                    (T, L),
-                    (H * L, 1),
-                    (i_t * BT, num_intra_levels + 10),
-                    (BT, 1),
-                    (1, 0),
-                )
+                p_l = tl.make_block_ptr( level_scales + (bos * H + i_h) * L, (T, L), (H * L, 1), (i_t * BT, num_intra_levels + 10), (BT, 1), (1, 0), )
                 b_l = tl.load(p_l, boundary_check=(0, 1))
                 b_o += tl.dot((b_l * b_q), kv_10.to(b_q.dtype)) * tl.exp(b_g)[:, None]
         if MIN_LEVEL <= 11 and MAX_LEVEL >= 11:
             if chunk_index & 2048:
-                p_l = tl.make_block_ptr(
-                    level_scales + (bos * H + i_h) * L,
-                    (T, L),
-                    (H * L, 1),
-                    (i_t * BT, num_intra_levels + 11),
-                    (BT, 1),
-                    (1, 0),
-                )
+                p_l = tl.make_block_ptr( level_scales + (bos * H + i_h) * L, (T, L), (H * L, 1), (i_t * BT, num_intra_levels + 11), (BT, 1), (1, 0), )
                 b_l = tl.load(p_l, boundary_check=(0, 1))
                 b_o += tl.dot((b_l * b_q), kv_11.to(b_q.dtype)) * tl.exp(b_g)[:, None]
 
@@ -547,124 +361,40 @@ def chunkwise_fwd_kernel(
 
     if STORE_FINAL_STATE:
         if (MIN_LEVEL <= 0 and MAX_LEVEL >= 0) and (chunk_index & 1 > 0):
-            p_kv = tl.make_block_ptr(
-                ht + ((i_n * L_OUT + 0) * H + i_h) * K * V,
-                (K, V),
-                (V, 1),
-                (i_k * BK, 0),
-                (BK, V),
-                (1, 0),
-            )
+            p_kv = tl.make_block_ptr( ht + ((i_n * L_OUT + 0) * H + i_h) * K * V, (K, V), (V, 1), (i_k * BK, 0), (BK, V), (1, 0), )
             tl.store(p_kv, kv_0, boundary_check=(0, 1))
         if (MIN_LEVEL <= 1 and MAX_LEVEL >= 1) and (chunk_index & 2 > 0):
-            p_kv = tl.make_block_ptr(
-                ht + ((i_n * L_OUT + 1) * H + i_h) * K * V,
-                (K, V),
-                (V, 1),
-                (i_k * BK, 0),
-                (BK, V),
-                (1, 0),
-            )
+            p_kv = tl.make_block_ptr( ht + ((i_n * L_OUT + 1) * H + i_h) * K * V, (K, V), (V, 1), (i_k * BK, 0), (BK, V), (1, 0), )
             tl.store(p_kv, kv_1, boundary_check=(0, 1))
         if (MIN_LEVEL <= 2 and MAX_LEVEL >= 2) and (chunk_index & 4 > 0):
-            p_kv = tl.make_block_ptr(
-                ht + ((i_n * L_OUT + 2) * H + i_h) * K * V,
-                (K, V),
-                (V, 1),
-                (i_k * BK, 0),
-                (BK, V),
-                (1, 0),
-            )
+            p_kv = tl.make_block_ptr( ht + ((i_n * L_OUT + 2) * H + i_h) * K * V, (K, V), (V, 1), (i_k * BK, 0), (BK, V), (1, 0), )
             tl.store(p_kv, kv_2, boundary_check=(0, 1))
         if (MIN_LEVEL <= 3 and MAX_LEVEL >= 3) and (chunk_index & 8 > 0):
-            p_kv = tl.make_block_ptr(
-                ht + ((i_n * L_OUT + 3) * H + i_h) * K * V,
-                (K, V),
-                (V, 1),
-                (i_k * BK, 0),
-                (BK, V),
-                (1, 0),
-            )
+            p_kv = tl.make_block_ptr( ht + ((i_n * L_OUT + 3) * H + i_h) * K * V, (K, V), (V, 1), (i_k * BK, 0), (BK, V), (1, 0), )
             tl.store(p_kv, kv_3, boundary_check=(0, 1))
         if (MIN_LEVEL <= 4 and MAX_LEVEL >= 4) and (chunk_index & 16 > 0):
-            p_kv = tl.make_block_ptr(
-                ht + ((i_n * L_OUT + 4) * H + i_h) * K * V,
-                (K, V),
-                (V, 1),
-                (i_k * BK, 0),
-                (BK, V),
-                (1, 0),
-            )
+            p_kv = tl.make_block_ptr( ht + ((i_n * L_OUT + 4) * H + i_h) * K * V, (K, V), (V, 1), (i_k * BK, 0), (BK, V), (1, 0), )
             tl.store(p_kv, kv_4, boundary_check=(0, 1))
         if (MIN_LEVEL <= 5 and MAX_LEVEL >= 5) and (chunk_index & 32 > 0):
-            p_kv = tl.make_block_ptr(
-                ht + ((i_n * L_OUT + 5) * H + i_h) * K * V,
-                (K, V),
-                (V, 1),
-                (i_k * BK, 0),
-                (BK, V),
-                (1, 0),
-            )
+            p_kv = tl.make_block_ptr( ht + ((i_n * L_OUT + 5) * H + i_h) * K * V, (K, V), (V, 1), (i_k * BK, 0), (BK, V), (1, 0), )
             tl.store(p_kv, kv_5, boundary_check=(0, 1))
         if (MIN_LEVEL <= 6 and MAX_LEVEL >= 6) and (chunk_index & 64 > 0):
-            p_kv = tl.make_block_ptr(
-                ht + ((i_n * L_OUT + 6) * H + i_h) * K * V,
-                (K, V),
-                (V, 1),
-                (i_k * BK, 0),
-                (BK, V),
-                (1, 0),
-            )
+            p_kv = tl.make_block_ptr( ht + ((i_n * L_OUT + 6) * H + i_h) * K * V, (K, V), (V, 1), (i_k * BK, 0), (BK, V), (1, 0), )
             tl.store(p_kv, kv_6, boundary_check=(0, 1))
         if (MIN_LEVEL <= 7 and MAX_LEVEL >= 7) and (chunk_index & 128 > 0):
-            p_kv = tl.make_block_ptr(
-                ht + ((i_n * L_OUT + 7) * H + i_h) * K * V,
-                (K, V),
-                (V, 1),
-                (i_k * BK, 0),
-                (BK, V),
-                (1, 0),
-            )
+            p_kv = tl.make_block_ptr( ht + ((i_n * L_OUT + 7) * H + i_h) * K * V, (K, V), (V, 1), (i_k * BK, 0), (BK, V), (1, 0), )
             tl.store(p_kv, kv_7, boundary_check=(0, 1))
         if (MIN_LEVEL <= 8 and MAX_LEVEL >= 8) and (chunk_index & 256 > 0):
-            p_kv = tl.make_block_ptr(
-                ht + ((i_n * L_OUT + 8) * H + i_h) * K * V,
-                (K, V),
-                (V, 1),
-                (i_k * BK, 0),
-                (BK, V),
-                (1, 0),
-            )
+            p_kv = tl.make_block_ptr( ht + ((i_n * L_OUT + 8) * H + i_h) * K * V, (K, V), (V, 1), (i_k * BK, 0), (BK, V), (1, 0), )
             tl.store(p_kv, kv_8, boundary_check=(0, 1))
         if (MIN_LEVEL <= 9 and MAX_LEVEL >= 9) and (chunk_index & 512 > 0):
-            p_kv = tl.make_block_ptr(
-                ht + ((i_n * L_OUT + 9) * H + i_h) * K * V,
-                (K, V),
-                (V, 1),
-                (i_k * BK, 0),
-                (BK, V),
-                (1, 0),
-            )
+            p_kv = tl.make_block_ptr( ht + ((i_n * L_OUT + 9) * H + i_h) * K * V, (K, V), (V, 1), (i_k * BK, 0), (BK, V), (1, 0), )
             tl.store(p_kv, kv_9, boundary_check=(0, 1))
         if (MIN_LEVEL <= 10 and MAX_LEVEL >= 10) and (chunk_index & 1024 > 0):
-            p_kv = tl.make_block_ptr(
-                ht + ((i_n * L_OUT + 10) * H + i_h) * K * V,
-                (K, V),
-                (V, 1),
-                (i_k * BK, 0),
-                (BK, V),
-                (1, 0),
-            )
+            p_kv = tl.make_block_ptr( ht + ((i_n * L_OUT + 10) * H + i_h) * K * V, (K, V), (V, 1), (i_k * BK, 0), (BK, V), (1, 0), )
             tl.store(p_kv, kv_10, boundary_check=(0, 1))
         if (MIN_LEVEL <= 11 and MAX_LEVEL >= 11) and (chunk_index & 2048 > 0):
-            p_kv = tl.make_block_ptr(
-                ht + ((i_n * L_OUT + 11) * H + i_h) * K * V,
-                (K, V),
-                (V, 1),
-                (i_k * BK, 0),
-                (BK, V),
-                (1, 0),
-            )
+            p_kv = tl.make_block_ptr( ht + ((i_n * L_OUT + 11) * H + i_h) * K * V, (K, V), (V, 1), (i_k * BK, 0), (BK, V), (1, 0), )
             tl.store(p_kv, kv_11, boundary_check=(0, 1))
 
         tl.store(new_offsets + i_n, (offset // BT) * BT + T)
@@ -719,64 +449,25 @@ def copy_input_kernel(
     NT = tl.cdiv(T, BT)
 
     for i_t in range(NT):
-        p_g = tl.make_block_ptr(
-            g + bos * H + i_h, (T,), (H,), (i_t * BT + input_offset,), (BT,), (0,),
-        )
-        p_q = tl.make_block_ptr(
-            q + bos * K, (T, K), (K, 1), (i_t * BT + input_offset, 0), (BT, K), (1, 0),
-        )
-        p_k = tl.make_block_ptr(
-            k + bos * K, (T, K), (K, 1), (i_t * BT + input_offset, 0), (BT, K), (1, 0),
-        )
-        p_v = tl.make_block_ptr(
-            v + (bos * H + i_h) * V,
-            (T, V),
-            (H * V, 1),
-            (i_t * BT + input_offset, 0),
-            (BT, V),
-            (1, 0),
-        )
-        p_g_new = tl.make_block_ptr(
-            g_new + bos * H + i_h, (T,), (H,), (i_t * BT,), (BT,), (0,),
-        )
-        p_q_new = tl.make_block_ptr(
-            q_new + bos * K, (T, K), (K, 1), (i_t * BT, 0), (BT, K), (1, 0),
-        )
-        p_k_new = tl.make_block_ptr(
-            k_new + bos * K, (T, K), (K, 1), (i_t * BT, 0), (BT, K), (1, 0),
-        )
-        p_v_new = tl.make_block_ptr(
-            v_new + (bos * H + i_h) * V,
-            (T, V),
-            (H * V, 1),
-            (i_t * BT, 0),
-            (BT, V),
-            (1, 0),
-        )
+        p_g = tl.make_block_ptr( g + bos * H + i_h, (T,), (H,), (i_t * BT + input_offset,), (BT,), (0,), )
+        p_q = tl.make_block_ptr( q + bos * K, (T, K), (K, 1), (i_t * BT + input_offset, 0), (BT, K), (1, 0), )
+        p_k = tl.make_block_ptr( k + bos * K, (T, K), (K, 1), (i_t * BT + input_offset, 0), (BT, K), (1, 0), )
+        p_v = tl.make_block_ptr( v + (bos * H + i_h) * V, (T, V), (H * V, 1), (i_t * BT + input_offset, 0), (BT, V), (1, 0), )
+        p_g_new = tl.make_block_ptr( g_new + bos * H + i_h, (T,), (H,), (i_t * BT,), (BT,), (0,), )
+        p_q_new = tl.make_block_ptr( q_new + bos * K, (T, K), (K, 1), (i_t * BT, 0), (BT, K), (1, 0), )
+        p_k_new = tl.make_block_ptr( k_new + bos * K, (T, K), (K, 1), (i_t * BT, 0), (BT, K), (1, 0), )
+        p_v_new = tl.make_block_ptr( v_new + (bos * H + i_h) * V, (T, V), (H * V, 1), (i_t * BT, 0), (BT, V), (1, 0), )
 
-        b_g = tl.load(g + bos * H + i_h + (i_t * BT + tl.arange(0, BT)) * H, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0)
+        b_g = tl.load(p_g, boundary_check=(0,))
         b_q = tl.load(p_q, boundary_check=(0, 1))
         b_k = tl.load(p_k, boundary_check=(0, 1))
         b_v = tl.load(p_v, boundary_check=(0, 1))
 
         if i_t == 0:
-            p_g_prev = tl.make_block_ptr(
-                g_prev + i_n * BT * H + i_h, (BT,), (H,), (0,), (BT,), (0,),
-            )
-            p_q_prev = tl.make_block_ptr(
-                q_prev + i_n * BT * K, (BT, K), (K, 1), (0, 0), (BT, K), (1, 0),
-            )
-            p_k_prev = tl.make_block_ptr(
-                k_prev + i_n * BT * K, (BT, K), (K, 1), (0, 0), (BT, K), (1, 0),
-            )
-            p_v_prev = tl.make_block_ptr(
-                v_prev + (i_n * BT * H + i_h) * V,
-                (BT, V),
-                (H * V, 1),
-                (0, 0),
-                (BT, V),
-                (1, 0),
-            )
+            p_g_prev = tl.make_block_ptr( g_prev + i_n * BT * H + i_h, (BT,), (H,), (0,), (BT,), (0,), )
+            p_q_prev = tl.make_block_ptr( q_prev + i_n * BT * K, (BT, K), (K, 1), (0, 0), (BT, K), (1, 0), )
+            p_k_prev = tl.make_block_ptr( k_prev + i_n * BT * K, (BT, K), (K, 1), (0, 0), (BT, K), (1, 0), )
+            p_v_prev = tl.make_block_ptr( v_prev + (i_n * BT * H + i_h) * V, (BT, V), (H * V, 1), (0, 0), (BT, V), (1, 0), )
 
             b_g += tl.load(p_g_prev, boundary_check=(0,))
             b_q += tl.load(p_q_prev, boundary_check=(0, 1))
@@ -789,32 +480,11 @@ def copy_input_kernel(
         tl.store(p_v_new, b_v, boundary_check=(0, 1))
 
         for i in range(L):
-            p_l = tl.make_block_ptr(
-                level_scales + (bos * H + i_h) * L,
-                (T, L),
-                (H * L, 1),
-                (i_t * BT + input_offset, i),
-                (BT, 1),
-                (1, 0),
-            )
-            p_l_new = tl.make_block_ptr(
-                level_scales_new + (bos * H + i_h) * L,
-                (T, L),
-                (H * L, 1),
-                (i_t * BT, i),
-                (BT, 1),
-                (1, 0),
-            )
+            p_l = tl.make_block_ptr( level_scales + (bos * H + i_h) * L, (T, L), (H * L, 1), (i_t * BT + input_offset, i), (BT, 1), (1, 0), )
+            p_l_new = tl.make_block_ptr( level_scales_new + (bos * H + i_h) * L, (T, L), (H * L, 1), (i_t * BT, i), (BT, 1), (1, 0), )
             b_l = tl.load(p_l, boundary_check=(0,))
             if i_t == 0:
-                p_l_prev = tl.make_block_ptr(
-                    level_scales_prev + (i_n * BT * H + i_h) * L,
-                    (BT, L),
-                    (H * L, 1),
-                    (0, i),
-                    (BT, 1),
-                    (1, 0),
-                )
+                p_l_prev = tl.make_block_ptr( level_scales_prev + (i_n * BT * H + i_h) * L, (BT, L), (H * L, 1), (0, i), (BT, 1), (1, 0), )
                 b_l += tl.load(p_l_prev, boundary_check=(0,))
             tl.store(p_l_new, b_l, boundary_check=(0,))
 
@@ -861,32 +531,13 @@ def copy_last_chunk_kernel(
 
     seq_offset = (T // BT) * BT
 
-    p_q = tl.make_block_ptr(
-        q + bos * K, (T, K), (K, 1), (seq_offset, 0), (BT, K), (1, 0),
-    )
-    p_k = tl.make_block_ptr(
-        k + bos * K, (T, K), (K, 1), (seq_offset, 0), (BT, K), (1, 0),
-    )
-    p_v = tl.make_block_ptr(
-        v + (bos * H + i_h) * V,
-        (T, V),
-        (H * V, 1),
-        (seq_offset, 0),
-        (BT, V),
-        (1, 0),
-    )
-    p_g_prev = tl.make_block_ptr(
-        g_prev + i_n * BT * H + i_h, (BT,), (H,), (0,), (BT,), (0,),
-    )
-    p_q_prev = tl.make_block_ptr(
-        q_prev + i_n * BT * K, (BT, K), (K, 1), (0, 0), (BT, K), (1, 0),
-    )
-    p_k_prev = tl.make_block_ptr(
-        k_prev + i_n * BT * K, (BT, K), (K, 1), (0, 0), (BT, K), (1, 0),
-    )
-    p_v_prev = tl.make_block_ptr(
-        v_prev + (i_n * BT * H + i_h) * V, (BT, V), (H * V, 1), (0, 0), (BT, V), (1, 0),
-    )
+    p_q = tl.make_block_ptr( q + bos * K, (T, K), (K, 1), (seq_offset, 0), (BT, K), (1, 0), )
+    p_k = tl.make_block_ptr( k + bos * K, (T, K), (K, 1), (seq_offset, 0), (BT, K), (1, 0), )
+    p_v = tl.make_block_ptr( v + (bos * H + i_h) * V, (T, V), (H * V, 1), (seq_offset, 0), (BT, V), (1, 0), )
+    p_g_prev = tl.make_block_ptr( g_prev + i_n * BT * H + i_h, (BT,), (H,), (0,), (BT,), (0,), )
+    p_q_prev = tl.make_block_ptr( q_prev + i_n * BT * K, (BT, K), (K, 1), (0, 0), (BT, K), (1, 0), )
+    p_k_prev = tl.make_block_ptr( k_prev + i_n * BT * K, (BT, K), (K, 1), (0, 0), (BT, K), (1, 0), )
+    p_v_prev = tl.make_block_ptr( v_prev + (i_n * BT * H + i_h) * V, (BT, V), (H * V, 1), (0, 0), (BT, V), (1, 0), )
 
     tl.store(p_g_prev, tl.load(g + bos * H + i_h + (seq_offset + tl.arange(0, BT)) * H, mask=(seq_offset + tl.arange(0, BT)) < T, other=0), boundary_check=(0,))
     tl.store(p_q_prev, tl.load(p_q, boundary_check=(0, 1)), boundary_check=(0, 1))
@@ -894,22 +545,8 @@ def copy_last_chunk_kernel(
     tl.store(p_v_prev, tl.load(p_v, boundary_check=(0, 1)), boundary_check=(0, 1))
 
     for i in range(L):
-        p_l = tl.make_block_ptr(
-            level_scales + (bos * H + i_h) * L,
-            (T, L),
-            (H * L, 1),
-            (seq_offset, i),
-            (BT, 1),
-            (1, 0),
-        )
-        p_l_prev = tl.make_block_ptr(
-            level_scales_prev + (i_n * BT * H + i_h) * L,
-            (BT, L),
-            (H * L, 1),
-            (0, i),
-            (BT, 1),
-            (1, 0),
-        )
+        p_l = tl.make_block_ptr( level_scales + (bos * H + i_h) * L, (T, L), (H * L, 1), (seq_offset, i), (BT, 1), (1, 0), )
+        p_l_prev = tl.make_block_ptr( level_scales_prev + (i_n * BT * H + i_h) * L, (BT, L), (H * L, 1), (0, i), (BT, 1), (1, 0), )
         tl.store(p_l_prev, tl.load(p_l, boundary_check=(0,)), boundary_check=(0,))
 
 
@@ -965,32 +602,16 @@ def chunkwise_bwd_kernel_dhg(
     num_intra_levels = (tl.log2(float(BT))).to(tl.int32) + 1
 
     for i_t in range(tl.cdiv(T, BT) - 1, -1, -1):
-        p_dh = tl.make_block_ptr(
-            dh + ((i_n * NT + i_t) * H + i_h) * K * V,
-            (K, V),
-            (V, 1),
-            (i_k * BK, 0),
-            (BK, V),
-            (1, 0),
-        )
+        p_dh = tl.make_block_ptr( dh + ((i_n * NT + i_t) * H + i_h) * K * V, (K, V), (V, 1), (i_k * BK, 0), (BK, V), (1, 0), )
         b_dh_old = tl.load(p_dh, boundary_check=(0, 1))
 
         if (i_t & (1 << ell)) == 0:  # store the chunk
-            tl.store(
-                p_dh, b_dh.to(p_dh.dtype.element_ty) + b_dh_old, boundary_check=(0, 1),
-            )
+            tl.store( p_dh, b_dh.to(p_dh.dtype.element_ty) + b_dh_old, boundary_check=(0, 1), )
             # if you are about the transition to compute, reset to zeros
             if i_t > 0 and ((i_t - 1) & (1 << ell)) > 0:
                 b_dh = tl.zeros([BK, V], dtype=tl.float32)
         if i_t & (1 << ell):
-            p_h = tl.make_block_ptr(
-                h_l + ((i_n * NT + i_t) * H + i_h) * K * V,
-                (K, V),
-                (V, 1),
-                (i_k * BK, 0),
-                (BK, V),
-                (1, 0),
-            )
+            p_h = tl.make_block_ptr( h_l + ((i_n * NT + i_t) * H + i_h) * K * V, (K, V), (V, 1), (i_k * BK, 0), (BK, V), (1, 0), )
 
             b_h = tl.load(p_h, boundary_check=(0, 1))
             p_dg_last = dg_last + i_n * NT * H + i_t * H + i_h
@@ -999,30 +620,12 @@ def chunkwise_bwd_kernel_dhg(
         b_g_last = tl.exp(tl.load(g + bos * H + last_idx * H + i_h))
         b_dh *= b_g_last
         if i_t & (1 << ell):  # compute this chunk
-            p_g = tl.make_block_ptr(
-                g + bos * H + i_h, (T,), (H,), (i_t * BT,), (BT,), (0,),
-            )
-            p_q = tl.make_block_ptr(
-                q + bos * K, (K, T), (1, K), (i_k * BK, i_t * BT), (BK, BT), (0, 1),
-            )
-            p_do = tl.make_block_ptr(
-                do + (bos * H + i_h) * V,
-                (T, V),
-                (H * V, 1),
-                (i_t * BT, 0),
-                (BT, V),
-                (1, 0),
-            )
-            p_l = tl.make_block_ptr(
-                l + (bos * H + i_h) * L + num_intra_levels + ell,
-                (T,),
-                (H * L,),
-                (i_t * BT,),
-                (BT,),
-                (0,),
-            )
+            p_g = tl.make_block_ptr( g + bos * H + i_h, (T,), (H,), (i_t * BT,), (BT,), (0,), )
+            p_q = tl.make_block_ptr( q + bos * K, (K, T), (1, K), (i_k * BK, i_t * BT), (BK, BT), (0, 1), )
+            p_do = tl.make_block_ptr( do + (bos * H + i_h) * V, (T, V), (H * V, 1), (i_t * BT, 0), (BT, V), (1, 0), )
+            p_l = tl.make_block_ptr( l + (bos * H + i_h) * L + num_intra_levels + ell, (T,), (H * L,), (i_t * BT,), (BT,), (0,), )
             b_l = tl.load(p_l, boundary_check=(0,))
-            b_g = tl.load(g + bos * H + i_h + (seq_offset + tl.arange(0, BT)) * H, mask=(seq_offset + tl.arange(0, BT)) < T, other=0)
+            b_g = tl.load(p_g, boundary_check=(0,))
             b_q = tl.load(p_q, boundary_check=(0, 1))
             b_q = (b_q * (tl.exp(b_g) * b_l)[None, :]).to(b_q.dtype)
             b_do = tl.load(p_do, boundary_check=(0, 1))
@@ -1083,53 +686,15 @@ def chunkwise_bwd_kernel_hdqgl(
     num_intra_levels = (tl.log2(float(BT))).to(tl.int32) + 1
 
     for i_t in range(tl.cdiv(T, BT)):
+        pass
         if i_t & (1 << ell):  # compute and store derivatives
-            p_do = tl.make_block_ptr(
-                do + (bos * H + i_h) * V,
-                (T, V),
-                (H * V, 1),
-                (i_t * BT, 0),
-                (BT, V),
-                (1, 0),
-            )
-            p_q = tl.make_block_ptr(
-                q + bos * K, (T, K), (K, 1), (i_t * BT, 0), (BT, K), (1, 0),
-            )
-            p_l = tl.make_block_ptr(
-                l + (bos * H + i_h) * L + num_intra_levels + ell,
-                (T,),
-                (H * L,),
-                (i_t * BT,),
-                (BT,),
-                (0,),
-            )
-            p_dq = tl.make_block_ptr(
-                dq + (bos * H + i_h) * K,
-                (T, K),
-                (H * K, 1),
-                (i_t * BT, 0),
-                (BT, K),
-                (1, 0),
-            )
-            p_dg = tl.make_block_ptr(
-                dg + bos * H + i_h, (T,), (H,), (i_t * BT,), (BT,), (0,),
-            )
-            p_dl = tl.make_block_ptr(
-                dl + (bos * H + i_h) * L + num_intra_levels + ell,
-                (T,),
-                (H * L,),
-                (i_t * BT,),
-                (BT,),
-                (0,),
-            )
-            p_h = tl.make_block_ptr(
-                h_l + ((i_n * NT + i_t) * H + i_h) * K * V,
-                (V, K),
-                (1, V),
-                (0, 0),
-                (V, K),
-                (0, 1),
-            )
+            p_do = tl.make_block_ptr( do + (bos * H + i_h) * V, (T, V), (H * V, 1), (i_t * BT, 0), (BT, V), (1, 0), )
+            p_q = tl.make_block_ptr( q + bos * K, (T, K), (K, 1), (i_t * BT, 0), (BT, K), (1, 0), )
+            p_l = tl.make_block_ptr( l + (bos * H + i_h) * L + num_intra_levels + ell, (T,), (H * L,), (i_t * BT,), (BT,), (0,), )
+            p_dq = tl.make_block_ptr( dq + (bos * H + i_h) * K, (T, K), (H * K, 1), (i_t * BT, 0), (BT, K), (1, 0), )
+            p_dg = tl.make_block_ptr( dg + bos * H + i_h, (T,), (H,), (i_t * BT,), (BT,), (0,), )
+            p_dl = tl.make_block_ptr( dl + (bos * H + i_h) * L + num_intra_levels + ell, (T,), (H * L,), (i_t * BT,), (BT,), (0,), )
+            p_h = tl.make_block_ptr( h_l + ((i_n * NT + i_t) * H + i_h) * K * V, (V, K), (1, V), (0, 0), (V, K), (0, 1), )
 
             b_do = tl.load(p_do, boundary_check=(0, 1))
             b_q = tl.load(p_q, boundary_check=(0, 1))
@@ -1143,16 +708,10 @@ def chunkwise_bwd_kernel_hdqgl(
 
             tl.store(p_h, b_h, boundary_check=(0, 1))
             b_dq_old = tl.load(p_dq, boundary_check=(0, 1))
-            tl.store(
-                p_dq,
-                (b_l[:, None] * b_dlq).to(p_dq.dtype.element_ty) + b_dq_old,
-                boundary_check=(0, 1),
-            )
+            tl.store( p_dq, (b_l[:, None] * b_dlq).to(p_dq.dtype.element_ty) + b_dq_old, boundary_check=(0, 1), )
             tl.store(p_dl, b_dl.to(p_dl.dtype.element_ty), boundary_check=(0,))
             b_dg_old = tl.load(p_dg, boundary_check=(0,))
-            tl.store(
-                p_dg, b_dg.to(p_dg.dtype.element_ty) + b_dg_old, boundary_check=(0,),
-            )
+            tl.store( p_dg, b_dg.to(p_dg.dtype.element_ty) + b_dg_old, boundary_check=(0,), )
             if ((i_t + 1) & (1 << ell)) == 0:
                 b_h = tl.zeros([V, K], dtype=tl.float32)
 
@@ -1160,17 +719,8 @@ def chunkwise_bwd_kernel_hdqgl(
         b_g_last = tl.load(g + bos * H + last_idx * H + i_h)
         b_h *= tl.exp(b_g_last)
         if (i_t & (1 << ell)) == 0:  # update the state
-            p_k = tl.make_block_ptr(
-                k + bos * K, (T, K), (K, 1), (i_t * BT, 0), (BT, K), (1, 0),
-            )
-            p_v = tl.make_block_ptr(
-                v + (bos * H + i_h) * V,
-                (V, T),
-                (1, H * V),
-                (0, i_t * BT),
-                (V, BT),
-                (0, 1),
-            )
+            p_k = tl.make_block_ptr( k + bos * K, (T, K), (K, 1), (i_t * BT, 0), (BT, K), (1, 0), )
+            p_v = tl.make_block_ptr( v + (bos * H + i_h) * V, (V, T), (1, H * V), (0, i_t * BT), (V, BT), (0, 1), )
             b_g = tl.load(g + bos * H + i_h + (i_t * BT + tl.arange(0, BT)) * H, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0)
             b_k = tl.load(p_k, boundary_check=(0, 1))
             b_v = tl.load(p_v, boundary_check=(0, 1))
@@ -1224,26 +774,10 @@ def chunkwise_bwd_kernel_dkg(
     o_t = i_t * BT + o_i
     m_t = o_t < T
 
-    p_dh = tl.make_block_ptr(
-        dh + ((i_n * NT + i_t) * H + i_h) * K * V,
-        (V, K),
-        (1, V),
-        (0, 0),
-        (V, K),
-        (0, 1),
-    )
+    p_dh = tl.make_block_ptr( dh + ((i_n * NT + i_t) * H + i_h) * K * V, (V, K), (1, V), (0, 0), (V, K), (0, 1), )
     desc_k = make_tensor_descriptor(k + bos * K, [T, K], [K, 1], [BT, K])
-    p_v = tl.make_block_ptr(
-        v + (bos * H + i_h) * V,
-        (T, V),
-        (H * V, 1),
-        (i_t * BT, 0),
-        (BT, V),
-        (1, 0),
-    )
-    p_dk = tl.make_block_ptr(
-        dk + (bos * H + i_h) * K, (T, K), (H * K, 1), (i_t * BT, 0), (BT, K), (1, 0),
-    )
+    p_v = tl.make_block_ptr( v + (bos * H + i_h) * V, (T, V), (H * V, 1), (i_t * BT, 0), (BT, V), (1, 0), )
+    p_dk = tl.make_block_ptr( dk + (bos * H + i_h) * K, (T, K), (H * K, 1), (i_t * BT, 0), (BT, K), (1, 0), )
 
     b_dh = tl.load(p_dh, boundary_check=(0, 1))
     b_g = tl.load(g + bos * H + i_h + (i_t * BT + tl.arange(0, BT)) * H, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0)
@@ -1308,18 +842,9 @@ def chunkwise_bwd_kernel_dv(
     o_t = i_t * BT + tl.arange(0, BT)
     m_t = o_t < T
 
-    p_dh = tl.make_block_ptr(
-        dh + ((i_n * NT + i_t) * H + i_h) * K * V,
-        (K, V),
-        (V, 1),
-        (0, 0),
-        (K, V),
-        (1, 0),
-    )
+    p_dh = tl.make_block_ptr( dh + ((i_n * NT + i_t) * H + i_h) * K * V, (K, V), (V, 1), (0, 0), (K, V), (1, 0), )
     desc_k = make_tensor_descriptor(k + bos * K, [T, K], [K, 1], [BT, K])
-    p_dv = tl.make_block_ptr(
-        dv + (bos * H + i_h) * V, (T, V), (H * V, 1), (i_t * BT, 0), (BT, V), (1, 0),
-    )
+    p_dv = tl.make_block_ptr( dv + (bos * H + i_h) * V, (T, V), (H * V, 1), (i_t * BT, 0), (BT, V), (1, 0), )
 
     last_idx = min((i_t + 1) * BT, T) - 1
     b_g_last = tl.load(g + bos * H + last_idx * H + i_h)
@@ -1389,21 +914,11 @@ def chunkwise_bwd_kernel_diag(
 
     desc_q = make_tensor_descriptor(q + bos * K, [T, K], [K, 1], [BT, K])
     desc_k = make_tensor_descriptor(k + bos * K, [T, K], [K, 1], [BT, K])
-    p_v = tl.make_block_ptr(
-        v + (bos * H + i_h) * V, (V, T), (1, H * V), (0, i_t * BT), (V, BT), (0, 1),
-    )
-    p_do = tl.make_block_ptr(
-        do + (bos * H + i_h) * V, (T, V), (H * V, 1), (i_t * BT, 0), (BT, V), (1, 0),
-    )
-    p_dq = tl.make_block_ptr(
-        dq + (bos * H + i_h) * K, (T, K), (H * K, 1), (i_t * BT, 0), (BT, K), (1, 0),
-    )
-    p_dk = tl.make_block_ptr(
-        dk + (bos * H + i_h) * K, (T, K), (H * K, 1), (i_t * BT, 0), (BT, K), (1, 0),
-    )
-    p_dv = tl.make_block_ptr(
-        dv + (bos * H + i_h) * V, (T, V), (H * V, 1), (i_t * BT, 0), (BT, V), (1, 0),
-    )
+    p_v = tl.make_block_ptr( v + (bos * H + i_h) * V, (V, T), (1, H * V), (0, i_t * BT), (V, BT), (0, 1), )
+    p_do = tl.make_block_ptr( do + (bos * H + i_h) * V, (T, V), (H * V, 1), (i_t * BT, 0), (BT, V), (1, 0), )
+    p_dq = tl.make_block_ptr( dq + (bos * H + i_h) * K, (T, K), (H * K, 1), (i_t * BT, 0), (BT, K), (1, 0), )
+    p_dk = tl.make_block_ptr( dk + (bos * H + i_h) * K, (T, K), (H * K, 1), (i_t * BT, 0), (BT, K), (1, 0), )
+    p_dv = tl.make_block_ptr( dv + (bos * H + i_h) * V, (T, V), (H * V, 1), (i_t * BT, 0), (BT, V), (1, 0), )
 
     b_g = tl.load(g + bos * H + i_h + (i_t * BT + tl.arange(0, BT)) * H, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0)
     b_q = tl.trans(desc_q.load([i_t * BT, 0]))

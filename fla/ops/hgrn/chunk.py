@@ -158,7 +158,7 @@ def chunk_hgrn_bwd_kernel_h(
         b_gc = tl.load(g + (i_b * T + i_t * BT + BT) * D + o_d, mask=mask, other=0).to(tl.float32)
     b_dh = tl.zeros([BD], dtype=tl.float32)
     for _ in range(BC - 1, -1, -1):
-        desc_gc.store([i_t * BT, i_d * BD], b_gc.to(desc_gc.dtype), mask=mask)
+        tl.store(p_gc, b_gc.to(p_gc.dtype.element_ty), mask=mask)
 
         b_g = tl.load(p_g, mask=mask, other=0).to(tl.float32)
         b_do = tl.load(p_do, mask=mask, other=0).to(tl.float32)

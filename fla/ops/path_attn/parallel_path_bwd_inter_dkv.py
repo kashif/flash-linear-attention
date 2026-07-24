@@ -105,6 +105,7 @@ def parallel_path_bwd_dkv_kernel(
     last_chunk_end = tl.ceil(T / BS).to(tl.int32) * BS - BS
 
     for offset in range(last_chunk_end, last_chunk_start+S-BS, -BS):
+        pass
         b_delta = tl.load(D + (offset + tl.arange(0, BS)) * HQ, mask=(offset + tl.arange(0, BS)) < T, other=0)
         b_l = tl.load(L + (offset + tl.arange(0, BS)) * HQ, mask=(offset + tl.arange(0, BS)) < T, other=0)
 
@@ -112,6 +113,7 @@ def parallel_path_bwd_dkv_kernel(
         b_q = desc_q.load([offset, 0])
         b_A = tl.dot(b_k, tl.trans(b_q).to(b_k.dtype))
         if USE_GATE:
+            pass
             b_g_cumsum_q = tl.load(g_cumsum + (offset + tl.arange(0, BS)) * HQ, mask=(offset + tl.arange(0, BS)) < T, other=0)
             b_A = b_A + b_g_cumsum_q[None, :] - b_g_cumsum_k[:, None]
             b_A = tl.where((offset + tl.arange(0, BS) < T)[None, :], b_A, float("-inf"))  # avoid nan

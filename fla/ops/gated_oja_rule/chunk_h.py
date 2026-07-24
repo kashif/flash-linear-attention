@@ -391,7 +391,7 @@ def chunk_oja_bwd_kernel_dhu_blockdim64(
             p_do = tl.make_block_ptr(do, (T, V), (stride_v, 1), (i_t * BT, 0), (BT, 64), (1, 0))  # [BT, BV]
             b_do = tl.load(p_do, boundary_check=(0, 1))
             p_w = tl.make_block_ptr(w, (T, V), (stride_v, 1), (i_t * BT, 0), (BT, 64), (1, 0))  # [BT, BV]
-            b_w = desc_w.load([i_t * BT, 192])
+            b_w = tl.load(p_w, boundary_check=(0, 1))
             p_gv = tl.make_block_ptr(gv, (T, V), (stride_v, 1), (i_t * BT, 0), (BT, 64), (1, 0))  # [BT, BV]
             b_gv = tl.load(p_gv, boundary_check=(0, 1))
             if USE_GV:
@@ -406,7 +406,7 @@ def chunk_oja_bwd_kernel_dhu_blockdim64(
             desc_do = make_tensor_descriptor(do, [T, V], [stride_v, 1], [BT, 64])
             b_do = desc_do.load([i_t * BT, 64])
             p_w = tl.make_block_ptr(w, (T, V), (stride_v, 1), (i_t * BT, 64), (BT, 64), (1, 0))  # [BT, BV]
-            b_w = desc_w.load([i_t * BT, 192])
+            b_w = tl.load(p_w, boundary_check=(0, 1))
             p_gv = tl.make_block_ptr(gv, (T, V), (stride_v, 1), (i_t * BT, 64), (BT, 64), (1, 0))  # [BT, BV]
             b_gv = tl.load(p_gv, boundary_check=(0, 1))
             if USE_GV:
@@ -420,7 +420,7 @@ def chunk_oja_bwd_kernel_dhu_blockdim64(
             desc_do = make_tensor_descriptor(do, [T, V], [stride_v, 1], [BT, 64])
             b_do = desc_do.load([i_t * BT, 128])
             p_w = tl.make_block_ptr(w, (T, V), (stride_v, 1), (i_t * BT, 128), (BT, 64), (1, 0))  # [BT, BV]
-            b_w = desc_w.load([i_t * BT, 192])
+            b_w = tl.load(p_w, boundary_check=(0, 1))
             p_gv = tl.make_block_ptr(gv, (T, V), (stride_v, 1), (i_t * BT, 128), (BT, 64), (1, 0))  # [BT, BV]
             b_gv = tl.load(p_gv, boundary_check=(0, 1))
             if USE_GV:
@@ -434,7 +434,7 @@ def chunk_oja_bwd_kernel_dhu_blockdim64(
             desc_do = make_tensor_descriptor(do, [T, V], [stride_v, 1], [BT, 64])
             b_do = desc_do.load([i_t * BT, 192])
             p_w = tl.make_block_ptr(w, (T, V), (stride_v, 1), (i_t * BT, 192), (BT, 64), (1, 0))  # [BT, BV]
-            b_w = desc_w.load([i_t * BT, 192])
+            b_w = tl.load(p_w, boundary_check=(0, 1))
             p_gv = tl.make_block_ptr(gv, (T, V), (stride_v, 1), (i_t * BT, 192), (BT, 64), (1, 0))  # [BT, BV]
             b_gv = tl.load(p_gv, boundary_check=(0, 1))
             if USE_GV:

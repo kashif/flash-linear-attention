@@ -67,6 +67,7 @@ def chunk_scaled_dot_kkt_fwd_kernel(
         b_A += tl.dot(b_k, tl.trans(b_k))
 
     if USE_G:
+        pass
         b_g = tl.load(g + bos*HV + i_h + (i_t * BT + tl.arange(0, BT)) * HV, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0)
         b_g_diff = b_g[:, None] - b_g[None, :]
         b_A *= exp2(b_g_diff)
