@@ -85,19 +85,19 @@ def causal_conv1d_fwd_kernel(
 
     b_y = tl.zeros((BT, BD), dtype=tl.float32)
     if not USE_INITIAL_STATE:
+        desc_x = tl.make_tensor_descriptor(p_x, [T, D], [stride_x_t, 1], [BT, BD])
         for i_w in tl.static_range(-W + 1, 1):
-            desc_yi = make_tensor_descriptor(p_x, [T, D], [stride_x_t, stride_x_d], [BT, BD])
             # [BT, BD]
-            b_yi = desc_yi.load([i_t * BT + i_w, i_d * BD]).to(tl.float32)
+            b_yi = desc_x.load([i_t * BT + i_w, i_d * BD]).to(tl.float32)
             if HAS_WEIGHT:
                 b_yi *= tl.sum(b_w * (o_w == (i_w + W - 1)), 1)
             b_y += b_yi
     elif i_t * BT >= W:
         # to make Triton compiler happy, we need to copy codes
+        desc_x = tl.make_tensor_descriptor(p_x, [T, D], [stride_x_t, 1], [BT, BD])
         for i_w in tl.static_range(-W + 1, 1):
-            desc_yi = make_tensor_descriptor(p_x, [T, D], [stride_x_t, stride_x_d], [BT, BD])
             # [BT, BD]
-            b_yi = desc_yi.load([i_t * BT + i_w, i_d * BD]).to(tl.float32)
+            b_yi = desc_x.load([i_t * BT + i_w, i_d * BD]).to(tl.float32)
             if HAS_WEIGHT:
                 b_yi *= tl.sum(b_w * (o_w == (i_w + W - 1)), 1)
             b_y += b_yi
@@ -123,11 +123,11 @@ def causal_conv1d_fwd_kernel(
         b_y = b_y * tl.sigmoid(b_y)
 
     if HAS_RESIDUAL:
-        desc_residual = make_tensor_descriptor(residual + bos * D, [T, D], [D, 1], [BT, BD])
+        desc_residual = tl.make_tensor_descriptor(residual + bos * D, [T, D], [D, 1], [BT, BD])
         b_residual = desc_residual.load([i_t * BT, i_d * BD])
         b_y += b_residual
 
-    desc_y = make_tensor_descriptor(y + bos * D, [T, D], [D, 1], [BT, BD])
+    desc_y = tl.make_tensor_descriptor(y + bos * D, [T, D], [D, 1], [BT, BD])
     desc_y.store([i_t * BT, i_d * BD], tl.cast(b_y, dtype=desc_y.dtype, fp_downcast_rounding='rtne'))
 
 
@@ -208,7 +208,7 @@ def causal_conv1d_bwd_kernel(
     m_w = o_w >= 0
 
     if HAS_WEIGHT:
-        desc_x = make_tensor_descriptor(p_x, [T, D], [stride_x_t, stride_x_d], [BT, BD])
+        desc_x = tl.make_tensor_descriptor(p_x, [T, D], [stride_x_t, 1], [BT, BD])
         b_x = desc_x.load([i_t * BT, i_d * BD])
         # [BD, BW]
         b_w = tl.load(weight + o_d[:, None] * W + o_w, mask=m_d[:, None] & m_w, other=0)
@@ -217,13 +217,15 @@ def causal_conv1d_bwd_kernel(
     if HAS_BIAS:
         b_db = tl.zeros((BD,), dtype=tl.float32)
 
+    desc_dy = tl.make_tensor_descriptor(p_dy, [T, D], [stride_dy_t, 1], [BT, BD])
+    if ACTIVATION == 'swish' or ACTIVATION == 'silu':
+        desc_y = tl.make_tensor_descriptor(y + bos * D, [T, D], [D, 1], [BT, BD])
+
     if not USE_FINAL_STATE and not USE_INITIAL_STATE:
         for i_w in tl.static_range(0, W):
-            desc_dy_blk = make_tensor_descriptor(p_dy, [T, D], [stride_dy_t, stride_dy_d], [BT, BD])
             # [BT, BD]
-            b_dy = desc_dy_blk.load([i_t * BT + i_w, i_d * BD]).to(tl.float32)
+            b_dy = desc_dy.load([i_t * BT + i_w, i_d * BD]).to(tl.float32)
             if ACTIVATION == 'swish' or ACTIVATION == 'silu':
-                desc_y = make_tensor_descriptor(y + bos * D, [T, D], [D, 1], [BT, BD])
                 b_y = desc_y.load([i_t * BT + i_w, i_d * BD]).to(tl.float32)
                 b_ys = tl.sigmoid(b_y)
                 b_dy = b_dy * b_ys * (1 + b_y * (1 - b_ys))
@@ -240,11 +242,9 @@ def causal_conv1d_bwd_kernel(
     elif i_t * BT >= W:
         # to make Triton compiler happy, we need to copy codes
         for i_w in tl.static_range(0, W):
-            desc_dy_blk = make_tensor_descriptor(p_dy, [T, D], [stride_dy_t, stride_dy_d], [BT, BD])
             # [BT, BD]
-            b_dy = desc_dy_blk.load([i_t * BT + i_w, i_d * BD]).to(tl.float32)
+            b_dy = desc_dy.load([i_t * BT + i_w, i_d * BD]).to(tl.float32)
             if ACTIVATION == 'swish' or ACTIVATION == 'silu':
-                desc_y = make_tensor_descriptor(y + bos * D, [T, D], [D, 1], [BT, BD])
                 b_y = desc_y.load([i_t * BT + i_w, i_d * BD]).to(tl.float32)
                 b_ys = tl.sigmoid(b_y)
                 b_dy = b_dy * b_ys * (1 + b_y * (1 - b_ys))
@@ -262,10 +262,8 @@ def causal_conv1d_bwd_kernel(
         # which may use initial state
         o_t = i_t * BT + tl.arange(0, BT)
         for i_w in tl.static_range(0, W):
-            desc_dy_blk = make_tensor_descriptor(p_dy, [T, D], [stride_dy_t, stride_dy_d], [BT, BD])
-            b_dy_shift = desc_dy_blk.load([i_t * BT + i_w, i_d * BD]).to(tl.float32)
+            b_dy_shift = desc_dy.load([i_t * BT + i_w, i_d * BD]).to(tl.float32)
             if ACTIVATION == 'swish' or ACTIVATION == 'silu':
-                desc_y = make_tensor_descriptor(y + bos * D, [T, D], [D, 1], [BT, BD])
                 b_y_shift = desc_y.load([i_t * BT + i_w, i_d * BD]).to(tl.float32)
                 b_ys = tl.sigmoid(b_y_shift)
                 b_dy_shift = b_dy_shift * b_ys * (1 + b_y_shift * (1 - b_ys))
@@ -315,7 +313,7 @@ def causal_conv1d_bwd_kernel(
     else:
         p_dx = dx + tl.cast(i_b, tl.int64) * stride_dx_n
 
-    desc_dx = make_tensor_descriptor(p_dx, [T, D], [stride_dx_t, stride_dx_d], [BT, BD])
+    desc_dx = tl.make_tensor_descriptor(p_dx, [T, D], [stride_dx_t, 1], [BT, BD])
     desc_dx.store([i_t * BT, i_d * BD], tl.cast(b_dx, dtype=desc_dx.dtype, fp_downcast_rounding='rtne'))
 
 
@@ -514,7 +512,7 @@ def causal_conv1d_states_fwd_kernel(
         seq_len = T
         p_x = x + tl.cast(i_n, tl.int64) * stride_x_n
 
-    desc_x = make_tensor_descriptor(p_x, [seq_len, D], [stride_x_t, stride_x_d], [BW, BD])
+    desc_x = tl.make_tensor_descriptor(p_x, [seq_len, D], [stride_x_t, 1], [BW, BD])
 
     # b_x Shape: [BW, BD]
     b_x = desc_x.load([seq_len - BW, i_d * BD]).to(tl.float32)
