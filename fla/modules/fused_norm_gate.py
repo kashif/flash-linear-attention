@@ -16,6 +16,7 @@ import triton
 import triton.language as tl
 
 from fla.modules.backends import dispatch
+from fla.ops.utils.op import make_tensor_descriptor
 from fla.utils import autotune_cache_kwargs, get_multiprocessor_count, input_guard
 
 
@@ -61,18 +62,18 @@ def layer_norm_gated_fwd_kernel(
     o_d = tl.arange(0, BD)
     m_d = o_d < D
 
-    p_x = tl.make_block_ptr(x, (T, D), (D, 1), (i_t * BT, 0), (BT, BD), (1, 0))
-    b_x = tl.load(p_x, boundary_check=(0, 1)).to(tl.float32)
+    desc_x = make_tensor_descriptor(x, [T, D], [D, 1], [BT, BD])
+    b_x = desc_x.load([i_t * BT, 0]).to(tl.float32)
     if HAS_RESIDUAL:
-        p_res = tl.make_block_ptr(residual, (T, D), (D, 1), (i_t * BT, 0), (BT, BD), (1, 0))
-        b_x += tl.load(p_res, boundary_check=(0, 1)).to(tl.float32)
+        desc_res = make_tensor_descriptor(residual, [T, D], [D, 1], [BT, BD])
+        b_x += desc_res.load([i_t * BT, 0]).to(tl.float32)
     if STORE_RESIDUAL_OUT:
-        p_res_out = tl.make_block_ptr(residual_out, (T, D), (D, 1), (i_t * BT, 0), (BT, BD), (1, 0))
-        tl.store(p_res_out, b_x.to(p_res_out.dtype.element_ty), boundary_check=(0, 1))
+        desc_res_out = make_tensor_descriptor(residual_out, [T, D], [D, 1], [BT, BD])
+        desc_res_out.store([i_t * BT, 0], b_x.to(desc_res_out.dtype))
     if not IS_RMS_NORM:
         b_mean = tl.sum(b_x, axis=1) / D
-        p_mean = tl.make_block_ptr(mean, (T,), (1,), (i_t * BT,), (BT,), (0,))
-        tl.store(p_mean, b_mean.to(p_mean.dtype.element_ty), boundary_check=(0,))
+        desc_mean = make_tensor_descriptor(mean, [T], [1], [BT])
+        desc_mean.store([i_t * BT], b_mean.to(desc_mean.dtype))
         b_xbar = tl.where(m_d[None, :], b_x - b_mean[:, None], 0.0)
         b_var = tl.sum(b_xbar * b_xbar, axis=1) / D
     else:
@@ -80,8 +81,8 @@ def layer_norm_gated_fwd_kernel(
         b_var = tl.sum(b_xbar * b_xbar, axis=1) / D
     b_rstd = 1 / tl.sqrt(b_var + eps)
 
-    p_rstd = tl.make_block_ptr(rstd, (T,), (1,), (i_t * BT,), (BT,), (0,))
-    tl.store(p_rstd, b_rstd.to(p_rstd.dtype.element_ty), boundary_check=(0,))
+    desc_rstd = make_tensor_descriptor(rstd, [T], [1], [BT])
+    desc_rstd.store([i_t * BT], b_rstd.to(desc_rstd.dtype))
 
     if HAS_WEIGHT:
         b_w = tl.load(w + o_d, mask=m_d).to(tl.float32)
@@ -93,16 +94,16 @@ def layer_norm_gated_fwd_kernel(
         b_y = b_y + b_b[None, :]
 
     # swish/sigmoid output gate
-    p_g = tl.make_block_ptr(g, (T, D), (D, 1), (i_t * BT, 0), (BT, BD), (1, 0))
-    b_g = tl.load(p_g, boundary_check=(0, 1)).to(tl.float32)
+    desc_g = make_tensor_descriptor(g, [T, D], [D, 1], [BT, BD])
+    b_g = desc_g.load([i_t * BT, 0]).to(tl.float32)
     if ACTIVATION == "swish" or ACTIVATION == "silu":
         b_y = b_y * b_g * tl.sigmoid(b_g)
     elif ACTIVATION == "sigmoid":
         b_y = b_y * tl.sigmoid(b_g)
 
     # Write output
-    p_y = tl.make_block_ptr(y, (T, D), (D, 1), (i_t * BT, 0), (BT, BD), (1, 0))
-    tl.store(p_y, b_y.to(p_y.dtype.element_ty), boundary_check=(0, 1))
+    desc_y = make_tensor_descriptor(y, [T, D], [D, 1], [BT, BD])
+    desc_y.store([i_t * BT, 0], b_y.to(desc_y.dtype))
 
 
 @triton.heuristics(
@@ -245,21 +246,21 @@ def layer_norm_gated_bwd_kernel(
     # handles the partial tail tile by zero-padding loads and skipping stores.
     # the m_t mask below further ensures dw/db only accumulate valid rows (< T).
     for i_t in range(i_s * BS, i_s * BS + BS, BT):
-        p_x = tl.make_block_ptr(x, (T, D), (D, 1), (i_t, 0), (BT, BD), (1, 0))
-        p_g = tl.make_block_ptr(g, (T, D), (D, 1), (i_t, 0), (BT, BD), (1, 0))
-        p_dy = tl.make_block_ptr(dy, (T, D), (D, 1), (i_t, 0), (BT, BD), (1, 0))
-        p_dx = tl.make_block_ptr(dx, (T, D), (D, 1), (i_t, 0), (BT, BD), (1, 0))
-        p_dg = tl.make_block_ptr(dg, (T, D), (D, 1), (i_t, 0), (BT, BD), (1, 0))
+        desc_x = make_tensor_descriptor(x, [T, D], [D, 1], [BT, BD])
+        desc_g = make_tensor_descriptor(g, [T, D], [D, 1], [BT, BD])
+        desc_dy = make_tensor_descriptor(dy, [T, D], [D, 1], [BT, BD])
+        desc_dx = make_tensor_descriptor(dx, [T, D], [D, 1], [BT, BD])
+        desc_dg = make_tensor_descriptor(dg, [T, D], [D, 1], [BT, BD])
         # [BT, BD]
-        b_x = tl.load(p_x, boundary_check=(0, 1)).to(tl.float32)
-        b_g = tl.load(p_g, boundary_check=(0, 1)).to(tl.float32)
-        b_dy = tl.load(p_dy, boundary_check=(0, 1)).to(tl.float32)
+        b_x = desc_x.load([i_t, 0]).to(tl.float32)
+        b_g = desc_g.load([i_t, 0]).to(tl.float32)
+        b_dy = desc_dy.load([i_t, 0]).to(tl.float32)
 
         if not IS_RMS_NORM:
-            p_mean = tl.make_block_ptr(mean, (T,), (1,), (i_t,), (BT,), (0,))
-            b_mean = tl.load(p_mean, boundary_check=(0,))
-        p_rstd = tl.make_block_ptr(rstd, (T,), (1,), (i_t,), (BT,), (0,))
-        b_rstd = tl.load(p_rstd, boundary_check=(0,))
+            desc_mean = make_tensor_descriptor(mean, [T], [1], [BT])
+            b_mean = desc_mean.load([i_t])
+        desc_rstd = make_tensor_descriptor(rstd, [T], [1], [BT])
+        b_rstd = desc_rstd.load([i_t])
         # Compute dx
         b_xhat = (b_x - b_mean[:, None]) * b_rstd[:, None] if not IS_RMS_NORM else b_x * b_rstd[:, None]
         b_xhat = tl.where(m_d[None, :], b_xhat, 0.0)
@@ -268,8 +269,8 @@ def layer_norm_gated_bwd_kernel(
         if HAS_BIAS:
             b_y = b_y + b_b[None, :]
         if RECOMPUTE_OUTPUT:
-            p_y = tl.make_block_ptr(y, (T, D), (D, 1), (i_t, 0), (BT, BD), (1, 0))
-            tl.store(p_y, b_y.to(p_y.dtype.element_ty), boundary_check=(0, 1))
+            desc_y = make_tensor_descriptor(y, [T, D], [D, 1], [BT, BD])
+            desc_y.store([i_t, 0], b_y.to(desc_y.dtype))
 
         b_sigmoid_g = tl.sigmoid(b_g)
         if ACTIVATION == "swish" or ACTIVATION == "silu":
@@ -297,16 +298,16 @@ def layer_norm_gated_bwd_kernel(
             b_c1 = tl.sum(b_xhat * b_wdy, axis=1) / D
             b_dx = (b_wdy - b_xhat * b_c1[:, None]) * b_rstd[:, None]
         if HAS_DRESIDUAL:
-            p_dres = tl.make_block_ptr(dresidual, (T, D), (D, 1), (i_t, 0), (BT, BD), (1, 0))
-            b_dres = tl.load(p_dres, boundary_check=(0, 1)).to(tl.float32)
+            desc_dres = make_tensor_descriptor(dresidual, [T, D], [D, 1], [BT, BD])
+            b_dres = desc_dres.load([i_t, 0]).to(tl.float32)
             b_dx += b_dres
         # Write dx
         if STORE_DRESIDUAL:
-            p_dres_in = tl.make_block_ptr(dresidual_in, (T, D), (D, 1), (i_t, 0), (BT, BD), (1, 0))
-            tl.store(p_dres_in, b_dx.to(p_dres_in.dtype.element_ty), boundary_check=(0, 1))
+            desc_dres_in = make_tensor_descriptor(dresidual_in, [T, D], [D, 1], [BT, BD])
+            desc_dres_in.store([i_t, 0], b_dx.to(desc_dres_in.dtype))
 
-        tl.store(p_dx, b_dx.to(p_dx.dtype.element_ty), boundary_check=(0, 1))
-        tl.store(p_dg, b_dg.to(p_dg.dtype.element_ty), boundary_check=(0, 1))
+        desc_dx.store([i_t, 0], b_dx.to(desc_dx.dtype))
+        desc_dg.store([i_t, 0], b_dg.to(desc_dg.dtype))
 
     if HAS_WEIGHT:
         tl.store(dw + i_s * D + o_d, tl.sum(b_dw, axis=0), mask=m_d)

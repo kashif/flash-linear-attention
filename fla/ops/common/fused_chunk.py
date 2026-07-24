@@ -12,6 +12,7 @@ import triton.language as tl
 from fla.ops.utils import chunk_local_cumsum
 from fla.ops.utils.constant import RCP_LN2
 from fla.ops.utils.op import exp2
+from fla.ops.utils.op import make_tensor_descriptor
 from fla.utils import (
     IS_NVIDIA_HOPPER,
     autocast_custom_bwd,
@@ -101,24 +102,24 @@ def fused_chunk_fwd_kernel(
     # [BK, BV]
     b_h = tl.zeros([BK, BV], dtype=tl.float32)
     if USE_INITIAL_STATE:
-        p_h = tl.make_block_ptr(h0 + i_nh * K*V, (K, V), (V, 1), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
-        b_h = tl.load(p_h, boundary_check=(0, 1)).to(tl.float32)
+        desc_h = make_tensor_descriptor(h0 + i_nh * K*V, [K, V], [V, 1], [BK, BV])
+        b_h = desc_h.load([i_k * BK, i_v * BV]).to(tl.float32)
 
     for i_t in range(0, NT):
-        p_q = tl.make_block_ptr(q, (T, K), (H*K, 1), (i_t * BT, i_k * BK), (BT, BK), (1, 0))
-        p_k = tl.make_block_ptr(k, (K, T), (1, H*K), (i_k * BK, i_t * BT), (BK, BT), (0, 1))
-        p_v = tl.make_block_ptr(v, (T, V), (H*V, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
-        p_o = tl.make_block_ptr(o, (T, V), (H*V, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
+        desc_q = make_tensor_descriptor(q, [T, K], [H*K, 1], [BT, BK])
+        desc_k = make_tensor_descriptor(k, [T, K], [H*K, 1], [BT, BK])
+        desc_v = make_tensor_descriptor(v, [T, V], [H*V, 1], [BT, BV])
+        desc_o = make_tensor_descriptor(o, [T, V], [H*V, 1], [BT, BV])
 
         o_t = i_t * BT + tl.arange(0, BT)
         m_t = o_t < T
         # [BT, BK]
-        b_q = tl.load(p_q, boundary_check=(0, 1))
+        b_q = desc_q.load([i_t * BT, i_k * BK])
         b_q = (b_q * scale).to(b_q.dtype)
         # [BK, BT]
-        b_k = tl.load(p_k, boundary_check=(0, 1))
+        b_k = tl.trans(desc_k.load([i_t * BT, i_k * BK]))
         # [BT, BV]
-        b_v = tl.load(p_v, boundary_check=(0, 1))
+        b_v = desc_v.load([i_t * BT, i_v * BV])
         last_idx = min(i_t * BT + BT, T) - 1
 
         # [BT, BT]
@@ -153,11 +154,11 @@ def fused_chunk_fwd_kernel(
 
         b_h += tl.dot(b_k, b_v)
 
-        tl.store(p_o, b_o.to(p_o.dtype.element_ty), boundary_check=(0, 1))
+        desc_o.store([i_t * BT, i_v * BV], b_o.to(desc_o.dtype))
 
     if STORE_FINAL_STATE:
-        p_ht = tl.make_block_ptr(ht + i_nh * K*V, (K, V), (V, 1), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
-        tl.store(p_ht, b_h.to(p_ht.dtype.element_ty), boundary_check=(0, 1))
+        desc_ht = make_tensor_descriptor(ht + i_nh * K*V, [K, V], [V, 1], [BK, BV])
+        desc_ht.store([i_k * BK, i_v * BV], b_h.to(desc_ht.dtype))
 
 
 @triton.heuristics({
@@ -241,24 +242,24 @@ def fused_chunk_bwd_kernel(
     # [BV, BK]
     b_h = tl.zeros([BV, BK], dtype=tl.float32)
     if USE_INITIAL_STATE:
-        p_h = tl.make_block_ptr(h0 + i_nh * K*V, (V, K), (1, V), (i_v * BV, i_k * BK), (BV, BK), (0, 1))
-        b_h = tl.load(p_h, boundary_check=(0, 1)).to(tl.float32)
+        desc_h = make_tensor_descriptor(h0 + i_nh * K*V, [K, V], [V, 1], [BK, BV])
+        b_h = tl.trans(desc_h.load([i_k * BK, i_v * BV])).to(tl.float32)
 
     for i_t in range(0, NT):
-        p_q = tl.make_block_ptr(q, (T, K), (H*K, 1), (i_t * BT, i_k * BK), (BT, BK), (1, 0))
-        p_k = tl.make_block_ptr(k, (T, K), (H*K, 1), (i_t * BT, i_k * BK), (BT, BK), (1, 0))
-        p_v = tl.make_block_ptr(v, (V, T), (1, H*V), (i_v * BV, i_t * BT), (BV, BT), (0, 1))
-        p_do = tl.make_block_ptr(do, (T, V), (H*V, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
-        p_dq = tl.make_block_ptr(dq, (T, K), (H*K, 1), (i_t * BT, i_k * BK), (BT, BK), (1, 0))
+        desc_q = make_tensor_descriptor(q, [T, K], [H*K, 1], [BT, BK])
+        desc_k = make_tensor_descriptor(k, [T, K], [H*K, 1], [BT, BK])
+        desc_v = make_tensor_descriptor(v, [T, V], [H*V, 1], [BT, BV])
+        desc_do = make_tensor_descriptor(do, [T, V], [H*V, 1], [BT, BV])
+        desc_dq = make_tensor_descriptor(dq, [T, K], [H*K, 1], [BT, BK])
 
         o_t = i_t * BT + tl.arange(0, BT)
         m_t = o_t < T
         # [BT, BK]
-        b_k = tl.load(p_k, boundary_check=(0, 1))
+        b_k = desc_k.load([i_t * BT, i_k * BK])
         # [BV, BT]
-        b_v = tl.load(p_v, boundary_check=(0, 1))
+        b_v = tl.trans(desc_v.load([i_t * BT, i_v * BV]))
         # [BT, BV]
-        b_do = tl.load(p_do, boundary_check=(0, 1))
+        b_do = desc_do.load([i_t * BT, i_v * BV])
         last_idx = min(i_t * BT + BT, T) - 1
 
         # [BT, BT]
@@ -279,7 +280,7 @@ def fused_chunk_bwd_kernel(
             b_gs = tl.where(m_s & m_t, exp2(b_g[:, None] - b_g[None, :]), 0)
             b_ds = b_ds * b_gs
             # [BT, BK]
-            b_q = tl.load(p_q, boundary_check=(0, 1))
+            b_q = desc_q.load([i_t * BT, i_k * BK])
             b_dq = tl.dot(b_ds.to(b_k.dtype), b_k) + tl.dot((b_do * b_gq[:, None] * scale).to(b_k.dtype), b_h.to(b_k.dtype))
             # [BT]
             b_dg_t = tl.sum(b_q * b_dq, 1)
@@ -296,7 +297,7 @@ def fused_chunk_bwd_kernel(
             b_gs = tl.where(m_s & m_t, exp2(b_g[:, None] - b_g[None, :]), 0)
             b_ds = b_ds * b_gs
             # [BT, BK]
-            b_q = tl.load(p_q, boundary_check=(0, 1))
+            b_q = desc_q.load([i_t * BT, i_k * BK])
             b_dq = tl.dot(b_ds.to(b_k.dtype), b_k) + tl.dot((b_do * b_gq[:, None] * scale).to(b_k.dtype), b_h.to(b_k.dtype))
             # [BV, BK]
             b_h = b_h * b_gn + tl.dot(b_v, (b_k * b_gk[:, None]).to(b_k.dtype))
@@ -309,13 +310,13 @@ def fused_chunk_bwd_kernel(
             # [BV, BK]
             b_h += tl.dot(b_v, b_k)
 
-        tl.store(p_dq, b_dq.to(p_dq.dtype.element_ty), boundary_check=(0, 1))
+        desc_dq.store([i_t * BT, i_k * BK], b_dq.to(desc_dq.dtype))
 
     # [BK, BV]
     b_dh = tl.zeros([BK, BV], dtype=tl.float32)
     if USE_FINAL_STATE:
-        p_dh = tl.make_block_ptr(dht + i_nh * K*V, (K, V), (V, 1), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
-        b_dh += tl.load(p_dh, boundary_check=(0, 1)).to(tl.float32)
+        desc_dh = make_tensor_descriptor(dht + i_nh * K*V, [K, V], [V, 1], [BK, BV])
+        b_dh += desc_dh.load([i_k * BK, i_v * BV]).to(tl.float32)
 
     if USE_G:
         b_dg = tl.zeros([BT], dtype=tl.float32)
@@ -326,19 +327,19 @@ def fused_chunk_bwd_kernel(
     tl.debug_barrier()
 
     for i_t in range(NT - 1, -1, -1):
-        p_q = tl.make_block_ptr(q, (K, T), (1, H*K), (i_k * BK, i_t * BT), (BK, BT), (0, 1))
-        p_k = tl.make_block_ptr(k, (T, K), (H*K, 1), (i_t * BT, i_k * BK), (BT, BK), (1, 0))
-        p_v = tl.make_block_ptr(v, (T, V), (H*V, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
-        p_do = tl.make_block_ptr(do, (T, V), (H*V, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
-        p_dk = tl.make_block_ptr(dk, (T, K), (H*K, 1), (i_t * BT, i_k * BK), (BT, BK), (1, 0))
-        p_dv = tl.make_block_ptr(dv, (T, V), (H*V, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
+        desc_q = make_tensor_descriptor(q, [T, K], [H*K, 1], [BT, BK])
+        desc_k = make_tensor_descriptor(k, [T, K], [H*K, 1], [BT, BK])
+        desc_v = make_tensor_descriptor(v, [T, V], [H*V, 1], [BT, BV])
+        desc_do = make_tensor_descriptor(do, [T, V], [H*V, 1], [BT, BV])
+        desc_dk = make_tensor_descriptor(dk, [T, K], [H*K, 1], [BT, BK])
+        desc_dv = make_tensor_descriptor(dv, [T, V], [H*V, 1], [BT, BV])
         # [BK, BT]
-        b_q = tl.load(p_q, boundary_check=(0, 1))
+        b_q = tl.trans(desc_q.load([i_t * BT, i_k * BK]))
         # [BT, BK]
-        b_k = tl.load(p_k, boundary_check=(0, 1))
+        b_k = desc_k.load([i_t * BT, i_k * BK])
         # [BT, BV]
-        b_v = tl.load(p_v, boundary_check=(0, 1))
-        b_do = tl.load(p_do, boundary_check=(0, 1))
+        b_v = desc_v.load([i_t * BT, i_v * BV])
+        b_do = desc_do.load([i_t * BT, i_v * BV])
         last_idx = min(i_t * BT + BT, T) - 1
 
         o_t = i_t * BT + tl.arange(0, BT)
@@ -402,12 +403,12 @@ def fused_chunk_bwd_kernel(
             # [BK, BV]
             b_dh += tl.dot(b_q, (b_do * scale).to(b_do.dtype))
 
-        tl.store(p_dk, b_dk.to(p_dk.dtype.element_ty), boundary_check=(0, 1))
-        tl.store(p_dv, b_dv.to(p_dv.dtype.element_ty), boundary_check=(0, 1))
+        desc_dk.store([i_t * BT, i_k * BK], b_dk.to(desc_dk.dtype))
+        desc_dv.store([i_t * BT, i_v * BV], b_dv.to(desc_dv.dtype))
 
     if USE_INITIAL_STATE:
-        p_dh0 = tl.make_block_ptr(dh0 + i_nh * K*V, (K, V), (V, 1), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
-        tl.store(p_dh0, b_dh.to(p_dh0.dtype.element_ty), boundary_check=(0, 1))
+        desc_dh0 = make_tensor_descriptor(dh0 + i_nh * K*V, [K, V], [V, 1], [BK, BV])
+        desc_dh0.store([i_k * BK, i_v * BV], b_dh.to(desc_dh0.dtype))
 
 
 def fused_chunk_fwd(

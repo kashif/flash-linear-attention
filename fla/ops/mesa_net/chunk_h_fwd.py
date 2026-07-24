@@ -11,6 +11,7 @@ import triton.language as tl
 
 from fla.ops.utils import prepare_chunk_offsets
 from fla.ops.utils.op import exp2, safe_dot
+from fla.ops.utils.op import make_tensor_descriptor
 from fla.utils import autotune_cache_kwargs
 
 
@@ -72,32 +73,31 @@ def chunk_mesa_net_fwd_kernel_h(
     b_h = tl.zeros([BK, BV], dtype=tl.float32)
     b_h_kv = tl.zeros([BK, BV], dtype=tl.float32)
     if USE_INITIAL_STATE:
-        p_h0 = tl.make_block_ptr(h_init + i_nh * K*V, (K, V), (V, 1), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
-        b_h = tl.load(p_h0, boundary_check=(0, 1)).to(tl.float32)
-        p_h_kv0 = tl.make_block_ptr(h_kv_init + i_nh * K*V, (K, V), (V, 1), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
-        b_h_kv = tl.load(p_h_kv0, boundary_check=(0, 1)).to(tl.float32)
+        desc_h0 = make_tensor_descriptor(h_init + i_nh * K*V, [K, V], [V, 1], [BK, BV])
+        b_h = desc_h0.load([i_k * BK, i_v * BV]).to(tl.float32)
+        desc_h_kv0 = make_tensor_descriptor(h_kv_init + i_nh * K*V, [K, V], [V, 1], [BK, BV])
+        b_h_kv = desc_h_kv0.load([i_k * BK, i_v * BV]).to(tl.float32)
 
     for i_t in range(NT):
         i_s = i_t // (BS // BT)
-        p_k = tl.make_block_ptr(k + (bos*H + i_h) * K, (T, K), (H*K, 1), (i_t * BT, i_k * BK), (BT, BK), (1, 0))
-        p_k2 = tl.make_block_ptr(k + (bos*H + i_h) * V, (T, V), (H*V, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
-        p_v = tl.make_block_ptr(v + (bos*H + i_h) * V, (T, V), (H*V, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
-        p_beta = tl.make_block_ptr(beta + (bos*H + i_h), (T,), (H,), (i_t * BT,), (BT, ), (0,))
-        b_beta = tl.load(p_beta, boundary_check=(0,))
+        desc_k = make_tensor_descriptor(k + (bos*H + i_h) * K, [T, K], [H*K, 1], [BT, BK])
+        desc_k2 = make_tensor_descriptor(k + (bos*H + i_h) * V, [T, V], [H*V, 1], [BT, BV])
+        desc_v = make_tensor_descriptor(v + (bos*H + i_h) * V, [T, V], [H*V, 1], [BT, BV])
+        b_beta = tl.load(beta + (bos*H + i_h) + (i_t * BT + tl.arange(0, BT)) * H, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0)
 
         o_h = ((boh + i_s) * H + i_h).to(tl.int64) * K*V
-        p_h = tl.make_block_ptr(h + o_h, (K, V), (V, 1), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
-        p_h_kv = tl.make_block_ptr(h_kv + o_h, (K, V), (V, 1), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
+        desc_h = make_tensor_descriptor(h + o_h, [K, V], [V, 1], [BK, BV])
+        desc_h_kv = make_tensor_descriptor(h_kv + o_h, [K, V], [V, 1], [BK, BV])
 
         if i_t % (BS // BT) == 0:
-            tl.store(p_h, b_h.to(p_h.dtype.element_ty), boundary_check=(0, 1))
-            tl.store(p_h_kv, b_h_kv.to(p_h_kv.dtype.element_ty), boundary_check=(0, 1))
+            desc_h.store([i_k * BK, i_v * BV], b_h.to(desc_h.dtype))
+            desc_h_kv.store([i_k * BK, i_v * BV], b_h_kv.to(desc_h_kv.dtype))
 
         # [BK, BT]
-        b_k = tl.load(p_k, boundary_check=(0, 1))
-        b_k2 = tl.load(p_k2, boundary_check=(0, 1))
+        b_k = desc_k.load([i_t * BT, i_k * BK])
+        b_k2 = desc_k2.load([i_t * BT, i_v * BV])
         # [BT, BV]
-        b_v = tl.load(p_v, boundary_check=(0, 1))
+        b_v = desc_v.load([i_t * BT, i_v * BV])
         last_idx = min((i_t + 1) * BT, T) - 1
 
         # scalar decay
@@ -111,10 +111,10 @@ def chunk_mesa_net_fwd_kernel_h(
         b_h_kv += safe_dot(tl.trans(b_k_decay), b_v.to(b_k2.dtype))
 
     if STORE_FINAL_STATE:
-        p_ht = tl.make_block_ptr(h_final + i_nh * K*V, (K, V), (V, 1), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
-        tl.store(p_ht, b_h.to(p_ht.dtype.element_ty), boundary_check=(0, 1))
-        p_h_kv_final = tl.make_block_ptr(h_kv_final + i_nh * K*V, (K, V), (V, 1), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
-        tl.store(p_h_kv_final, b_h_kv.to(p_h_kv_final.dtype.element_ty), boundary_check=(0, 1))
+        desc_ht = make_tensor_descriptor(h_final + i_nh * K*V, [K, V], [V, 1], [BK, BV])
+        desc_ht.store([i_k * BK, i_v * BV], b_h.to(desc_ht.dtype))
+        desc_h_kv_final = make_tensor_descriptor(h_kv_final + i_nh * K*V, [K, V], [V, 1], [BK, BV])
+        desc_h_kv_final.store([i_k * BK, i_v * BV], b_h_kv.to(desc_h_kv_final.dtype))
 
 
 def chunk_mesa_fwd_h(

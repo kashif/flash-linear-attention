@@ -11,6 +11,7 @@ import triton.language as tl
 
 from fla.ops.generalized_delta_rule.iplr.wy_fast import prepare_wy_repr_fwd
 from fla.ops.utils import prepare_chunk_indices, prepare_chunk_offsets
+from fla.ops.utils.op import make_tensor_descriptor
 from fla.utils import (
     autocast_custom_bwd,
     autocast_custom_fwd,
@@ -75,35 +76,35 @@ def chunk_generalized_iplr_delta_rule_fwd_kernel_h(
     # [BK, BV]
     b_h = tl.zeros([BK, BV], dtype=tl.float32)
     if USE_INITIAL_STATE:
-        p_h0 = tl.make_block_ptr(h0 + i_nh * K*V, (K, V), (V, 1), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
-        b_h = tl.load(p_h0, boundary_check=(0, 1)).to(tl.float32)
+        desc_h0 = make_tensor_descriptor(h0 + i_nh * K*V, [K, V], [V, 1], [BK, BV])
+        b_h = desc_h0.load([i_k * BK, i_v * BV]).to(tl.float32)
 
     for i_t in range(NT):
-        p_h = tl.make_block_ptr(h + ((boh + i_t) * H + i_h) * K*V, (K, V), (V, 1), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
-        tl.store(p_h, b_h.to(p_h.dtype.element_ty), boundary_check=(0, 1))
+        desc_h = make_tensor_descriptor(h + ((boh + i_t) * H + i_h) * K*V, [K, V], [V, 1], [BK, BV])
+        desc_h.store([i_k * BK, i_v * BV], b_h.to(desc_h.dtype))
         b_hc = tl.zeros([BK, BV], dtype=tl.float32)
         # since we need to make all DK in the SRAM. we face serve SRAM memory burden. By subchunking we allievate such burden
         for i_c in range(tl.cdiv(min(BT, T - i_t * BT), BC)):
-            p_k = tl.make_block_ptr(k+(bos*H+i_h)*K, (K, T), (1, H*K), (i_k * BK, i_t * BT + i_c * BC), (BK, BC), (0, 1))
-            p_b = tl.make_block_ptr(b+(bos*H+i_h)*K, (K, T), (1, H*K), (i_k * BK, i_t * BT + i_c * BC), (BK, BC), (0, 1))
-            p_d = tl.make_block_ptr(d+(bos*H+i_h)*K, (T, K), (H*K, 1), (i_t * BT + i_c * BC, i_k * BK), (BC, BK), (1, 0))
-            p_v = tl.make_block_ptr(v+(bos*H+i_h)*V, (T, V), (H*V, 1), (i_t * BT + i_c * BC, i_v * BV), (BC, BV), (1, 0))
-            p_u = tl.make_block_ptr(u+(bos*H+i_h)*V, (T, V), (H*V, 1), (i_t * BT + i_c * BC, i_v * BV), (BC, BV), (1, 0))
-            p_v_new = tl.make_block_ptr(v_new+(bos*H+i_h)*V, (T, V), (H*V, 1), (i_t*BT+i_c*BC, i_v * BV), (BC, BV), (1, 0))
+            desc_k = make_tensor_descriptor(k+(bos*H+i_h)*K, [T, K], [H*K, 1], [BC, BK])
+            desc_b = make_tensor_descriptor(b+(bos*H+i_h)*K, [T, K], [H*K, 1], [BC, BK])
+            desc_d = make_tensor_descriptor(d+(bos*H+i_h)*K, [T, K], [H*K, 1], [BC, BK])
+            desc_v = make_tensor_descriptor(v+(bos*H+i_h)*V, [T, V], [H*V, 1], [BC, BV])
+            desc_u = make_tensor_descriptor(u+(bos*H+i_h)*V, [T, V], [H*V, 1], [BC, BV])
+            desc_v_new = make_tensor_descriptor(v_new+(bos*H+i_h)*V, [T, V], [H*V, 1], [BC, BV])
             # [BK, BC]
-            b_k = tl.load(p_k, boundary_check=(0, 1))
-            b_v = tl.load(p_v, boundary_check=(0, 1))
-            b_d = tl.load(p_d, boundary_check=(0, 1))
-            b_b = tl.load(p_b, boundary_check=(0, 1))
-            b_v2 = tl.dot(b_d, b_h.to(b_d.dtype)) + tl.load(p_u, boundary_check=(0, 1))
+            b_k = tl.trans(desc_k.load([i_t * BT + i_c * BC, i_k * BK]))
+            b_v = desc_v.load([i_t * BT + i_c * BC, i_v * BV])
+            b_d = desc_d.load([i_t * BT + i_c * BC, i_k * BK])
+            b_b = tl.trans(desc_b.load([i_t * BT + i_c * BC, i_k * BK]))
+            b_v2 = tl.dot(b_d, b_h.to(b_d.dtype)) + desc_u.load([i_t * BT + i_c * BC, i_v * BV])
             b_hc += tl.dot(b_k, b_v)
             b_hc += tl.dot(b_b, b_v2.to(b_k.dtype))
-            tl.store(p_v_new, b_v2.to(p_v_new.dtype.element_ty), boundary_check=(0, 1))
+            desc_v_new.store([i_t*BT+i_c*BC, i_v * BV], b_v2.to(desc_v_new.dtype))
         b_h += b_hc
 
     if STORE_FINAL_STATE:
-        p_ht = tl.make_block_ptr(ht + i_nh * K*V, (K, V), (V, 1), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
-        tl.store(p_ht, b_h.to(p_ht.dtype.element_ty), boundary_check=(0, 1))
+        desc_ht = make_tensor_descriptor(ht + i_nh * K*V, [K, V], [V, 1], [BK, BV])
+        desc_ht.store([i_k * BK, i_v * BV], b_h.to(desc_ht.dtype))
 
 
 @triton.heuristics({
@@ -170,17 +171,17 @@ def chunk_generalized_iplr_delta_rule_fwd_kernel_o(
     b_Aqb = tl.zeros([BT, BT], dtype=tl.float32)
 
     for i_k in range(tl.cdiv(K, BK)):
-        p_q = tl.make_block_ptr(q, (T, K), (stride_qk, 1), (i_t * BT, i_k * BK), (BT, BK), (1, 0))
-        p_k = tl.make_block_ptr(k, (K, T), (1, stride_qk), (i_k * BK, i_t * BT), (BK, BT), (0, 1))
-        p_h = tl.make_block_ptr(h, (K, V), (V, 1), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
-        p_b = tl.make_block_ptr(b, (K, T), (1, stride_qk), (i_k * BK, i_t * BT), (BK, BT), (0, 1))
+        desc_q = make_tensor_descriptor(q, [T, K], [stride_qk, 1], [BT, BK])
+        desc_k = make_tensor_descriptor(k, [T, K], [stride_qk, 1], [BT, BK])
+        desc_h = make_tensor_descriptor(h, [K, V], [V, 1], [BK, BV])
+        desc_b = make_tensor_descriptor(b, [T, K], [stride_qk, 1], [BT, BK])
         # [BT, BK]
-        b_q = tl.load(p_q, boundary_check=(0, 1))
+        b_q = desc_q.load([i_t * BT, i_k * BK])
         # [BK, BT]
-        b_k = tl.load(p_k, boundary_check=(0, 1))
-        b_b = tl.load(p_b, boundary_check=(0, 1))
+        b_k = tl.trans(desc_k.load([i_t * BT, i_k * BK]))
+        b_b = tl.trans(desc_b.load([i_t * BT, i_k * BK]))
         # [BK, BV]
-        b_h = tl.load(p_h, boundary_check=(0, 1))
+        b_h = desc_h.load([i_k * BK, i_v * BV])
         # [BT, BK] @ [BK, BV] -> [BT, BV]
         b_o += tl.dot(b_q, b_h)
         # [BT, BK] @ [BK, BT] -> [BT, BT]
@@ -193,13 +194,13 @@ def chunk_generalized_iplr_delta_rule_fwd_kernel_o(
     b_Aqk = tl.where(m_A, b_Aqk, 0)
     b_Aqb = tl.where(m_A, b_Aqb, 0)
 
-    p_v = tl.make_block_ptr(v, (T, V), (stride_vo, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
-    p_u = tl.make_block_ptr(u, (T, V), (stride_vo, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
-    p_o = tl.make_block_ptr(o, (T, V), (stride_vo, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
-    b_v = tl.load(p_v, boundary_check=(0, 1))
-    b_u = tl.load(p_u, boundary_check=(0, 1))
+    desc_v = make_tensor_descriptor(v, [T, V], [stride_vo, 1], [BT, BV])
+    desc_u = make_tensor_descriptor(u, [T, V], [stride_vo, 1], [BT, BV])
+    desc_o = make_tensor_descriptor(o, [T, V], [stride_vo, 1], [BT, BV])
+    b_v = desc_v.load([i_t * BT, i_v * BV])
+    b_u = desc_u.load([i_t * BT, i_v * BV])
     b_o = (b_o + tl.dot(b_Aqk.to(b_v.dtype), b_v) + tl.dot(b_Aqb.to(b_u.dtype), b_u)) * scale
-    tl.store(p_o, b_o.to(p_o.dtype.element_ty), boundary_check=(0, 1))
+    desc_o.store([i_t * BT, i_v * BV], b_o.to(desc_o.dtype))
 
 
 def chunk_generalized_iplr_delta_rule_fwd_o(

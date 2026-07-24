@@ -13,6 +13,7 @@ from fla.ops.backends import dispatch
 from fla.ops.utils import prepare_chunk_indices, prepare_chunk_offsets
 from fla.ops.utils.cache import fla_cache_autotune
 from fla.ops.utils.op import exp2
+from fla.ops.utils.op import make_tensor_descriptor
 from fla.utils import (
     IS_NVIDIA_BLACKWELL,
     IS_NVIDIA_HOPPER,
@@ -119,96 +120,95 @@ def chunk_gated_delta_rule_fwd_kernel_h_blockdim64(
     # load initial state
     if USE_INITIAL_STATE:
         if STATE_V_FIRST:
-            p_h0_1 = tl.make_block_ptr(h0, (V, K), (K, 1), (i_v * BV, 0), (BV, 64), (1, 0))
+            desc_h0_1 = make_tensor_descriptor(h0, [V, K], [K, 1], [BV, 64])
         else:
-            p_h0_1 = tl.make_block_ptr(h0, (K, V), (V, 1), (0, i_v * BV), (64, BV), (1, 0))
-        b_h1 += tl.load(p_h0_1, boundary_check=(0, 1)).to(tl.float32)
+            desc_h0_1 = make_tensor_descriptor(h0, [K, V], [V, 1], [64, BV])
+        b_h1 += desc_h0_1.load([0, i_v * BV]).to(tl.float32)
         if K > 64:
             if STATE_V_FIRST:
-                p_h0_2 = tl.make_block_ptr(h0, (V, K), (K, 1), (i_v * BV, 64), (BV, 64), (1, 0))
+                desc_h0_2 = make_tensor_descriptor(h0, [V, K], [K, 1], [BV, 64])
             else:
-                p_h0_2 = tl.make_block_ptr(h0, (K, V), (V, 1), (64, i_v * BV), (64, BV), (1, 0))
-            b_h2 += tl.load(p_h0_2, boundary_check=(0, 1)).to(tl.float32)
+                desc_h0_2 = make_tensor_descriptor(h0, [K, V], [V, 1], [64, BV])
+            b_h2 += desc_h0_2.load([64, i_v * BV]).to(tl.float32)
         if K > 128:
             if STATE_V_FIRST:
-                p_h0_3 = tl.make_block_ptr(h0, (V, K), (K, 1), (i_v * BV, 128), (BV, 64), (1, 0))
+                desc_h0_3 = make_tensor_descriptor(h0, [V, K], [K, 1], [BV, 64])
             else:
-                p_h0_3 = tl.make_block_ptr(h0, (K, V), (V, 1), (128, i_v * BV), (64, BV), (1, 0))
-            b_h3 += tl.load(p_h0_3, boundary_check=(0, 1)).to(tl.float32)
+                desc_h0_3 = make_tensor_descriptor(h0, [K, V], [V, 1], [64, BV])
+            b_h3 += desc_h0_3.load([128, i_v * BV]).to(tl.float32)
         if K > 192:
             if STATE_V_FIRST:
-                p_h0_4 = tl.make_block_ptr(h0, (V, K), (K, 1), (i_v * BV, 192), (BV, 64), (1, 0))
+                desc_h0_4 = make_tensor_descriptor(h0, [V, K], [K, 1], [BV, 64])
             else:
-                p_h0_4 = tl.make_block_ptr(h0, (K, V), (V, 1), (192, i_v * BV), (64, BV), (1, 0))
-            b_h4 += tl.load(p_h0_4, boundary_check=(0, 1)).to(tl.float32)
+                desc_h0_4 = make_tensor_descriptor(h0, [K, V], [V, 1], [64, BV])
+            b_h4 += desc_h0_4.load([192, i_v * BV]).to(tl.float32)
 
     # main recurrence
     for i_t in range(NT):
         i_t_int64 = i_t.to(tl.int64)
         if STATE_V_FIRST:
-            p_h1 = tl.make_block_ptr(h + i_t_int64 * HV*K*V, (V, K), (K, 1), (i_v * BV, 0), (BV, 64), (1, 0))
+            desc_h1 = make_tensor_descriptor(h + i_t_int64 * HV*K*V, [V, K], [K, 1], [BV, 64])
         else:
-            p_h1 = tl.make_block_ptr(h + i_t_int64 * HV*K*V, (K, V), (V, 1), (0, i_v * BV), (64, BV), (1, 0))
-        tl.store(p_h1, b_h1.to(p_h1.dtype.element_ty), boundary_check=(0, 1))
+            desc_h1 = make_tensor_descriptor(h + i_t_int64 * HV*K*V, [K, V], [V, 1], [64, BV])
+        desc_h1.store([0, i_v * BV], b_h1.to(desc_h1.dtype))
         if K > 64:
             if STATE_V_FIRST:
-                p_h2 = tl.make_block_ptr(h + i_t_int64 * HV*K*V, (V, K), (K, 1), (i_v * BV, 64), (BV, 64), (1, 0))
+                desc_h2 = make_tensor_descriptor(h + i_t_int64 * HV*K*V, [V, K], [K, 1], [BV, 64])
             else:
-                p_h2 = tl.make_block_ptr(h + i_t_int64 * HV*K*V, (K, V), (V, 1), (64, i_v * BV), (64, BV), (1, 0))
-            tl.store(p_h2, b_h2.to(p_h2.dtype.element_ty), boundary_check=(0, 1))
+                desc_h2 = make_tensor_descriptor(h + i_t_int64 * HV*K*V, [K, V], [V, 1], [64, BV])
+            desc_h2.store([64, i_v * BV], b_h2.to(desc_h2.dtype))
         if K > 128:
             if STATE_V_FIRST:
-                p_h3 = tl.make_block_ptr(h + i_t_int64 * HV*K*V, (V, K), (K, 1), (i_v * BV, 128), (BV, 64), (1, 0))
+                desc_h3 = make_tensor_descriptor(h + i_t_int64 * HV*K*V, [V, K], [K, 1], [BV, 64])
             else:
-                p_h3 = tl.make_block_ptr(h + i_t_int64 * HV*K*V, (K, V), (V, 1), (128, i_v * BV), (64, BV), (1, 0))
-            tl.store(p_h3, b_h3.to(p_h3.dtype.element_ty), boundary_check=(0, 1))
+                desc_h3 = make_tensor_descriptor(h + i_t_int64 * HV*K*V, [K, V], [V, 1], [64, BV])
+            desc_h3.store([128, i_v * BV], b_h3.to(desc_h3.dtype))
         if K > 192:
             if STATE_V_FIRST:
-                p_h4 = tl.make_block_ptr(h + i_t_int64 * HV*K*V, (V, K), (K, 1), (i_v * BV, 192), (BV, 64), (1, 0))
+                desc_h4 = make_tensor_descriptor(h + i_t_int64 * HV*K*V, [V, K], [K, 1], [BV, 64])
             else:
-                p_h4 = tl.make_block_ptr(h + i_t_int64 * HV*K*V, (K, V), (V, 1), (192, i_v * BV), (64, BV), (1, 0))
-            tl.store(p_h4, b_h4.to(p_h4.dtype.element_ty), boundary_check=(0, 1))
+                desc_h4 = make_tensor_descriptor(h + i_t_int64 * HV*K*V, [K, V], [V, 1], [64, BV])
+            desc_h4.store([192, i_v * BV], b_h4.to(desc_h4.dtype))
 
-        p_w = tl.make_block_ptr(w, (T, K), (HV*K, 1), (i_t * BT, 0), (BT, 64), (1, 0))
-        b_w = tl.load(p_w, boundary_check=(0, 1))
+        desc_w = make_tensor_descriptor(w, [T, K], [HV*K, 1], [BT, 64])
+        b_w = desc_w.load([i_t * BT, 0])
         if STATE_V_FIRST:
             b_v = tl.dot(b_w, tl.trans(b_h1).to(b_w.dtype))
         else:
             b_v = tl.dot(b_w, b_h1.to(b_w.dtype))
         if K > 64:
-            p_w = tl.make_block_ptr(w, (T, K), (HV*K, 1), (i_t * BT, 64), (BT, 64), (1, 0))
-            b_w = tl.load(p_w, boundary_check=(0, 1))
+            desc_w = make_tensor_descriptor(w, [T, K], [HV*K, 1], [BT, 64])
+            b_w = desc_w.load([i_t * BT, 64])
             if STATE_V_FIRST:
                 b_v += tl.dot(b_w, tl.trans(b_h2).to(b_w.dtype))
             else:
                 b_v += tl.dot(b_w, b_h2.to(b_w.dtype))
         if K > 128:
-            p_w = tl.make_block_ptr(w, (T, K), (HV*K, 1), (i_t * BT, 128), (BT, 64), (1, 0))
-            b_w = tl.load(p_w, boundary_check=(0, 1))
+            desc_w = make_tensor_descriptor(w, [T, K], [HV*K, 1], [BT, 64])
+            b_w = desc_w.load([i_t * BT, 128])
             if STATE_V_FIRST:
                 b_v += tl.dot(b_w, tl.trans(b_h3).to(b_w.dtype))
             else:
                 b_v += tl.dot(b_w, b_h3.to(b_w.dtype))
         if K > 192:
-            p_w = tl.make_block_ptr(w, (T, K), (HV*K, 1), (i_t * BT, 192), (BT, 64), (1, 0))
-            b_w = tl.load(p_w, boundary_check=(0, 1))
+            desc_w = make_tensor_descriptor(w, [T, K], [HV*K, 1], [BT, 64])
+            b_w = desc_w.load([i_t * BT, 192])
             if STATE_V_FIRST:
                 b_v += tl.dot(b_w, tl.trans(b_h4).to(b_w.dtype))
             else:
                 b_v += tl.dot(b_w, b_h4.to(b_w.dtype))
-        p_v = tl.make_block_ptr(v, (T, V), (HV*V, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
-        b_v = tl.load(p_v, boundary_check=(0, 1)) - b_v
+        desc_v = make_tensor_descriptor(v, [T, V], [HV*V, 1], [BT, BV])
+        b_v = desc_v.load([i_t * BT, i_v * BV]) - b_v
 
         if SAVE_NEW_VALUE:
-            p_v = tl.make_block_ptr(v_new, (T, V), (HV*V, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
-            tl.store(p_v, b_v.to(p_v.dtype.element_ty), boundary_check=(0, 1))
+            desc_v = make_tensor_descriptor(v_new, [T, V], [HV*V, 1], [BT, BV])
+            desc_v.store([i_t * BT, i_v * BV], b_v.to(desc_v.dtype))
 
         last_idx = min((i_t + 1) * BT, T) - 1
         if USE_G:
             m_t = (i_t * BT + tl.arange(0, BT)) < T
             b_g_last = tl.load(g + (bos * HV + last_idx * HV + i_h).to(tl.int64)).to(tl.float32)
-            p_g = tl.make_block_ptr(g + (bos * HV + i_h).to(tl.int64), (T,), (HV,), (i_t * BT,), (BT,), (0,))
-            b_g = tl.load(p_g, boundary_check=(0,)).to(tl.float32)
+            b_g = tl.load(g + bos * HV + i_h + (i_t * BT + tl.arange(0, BT)) * HV, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0).to(tl.float32)
             b_v = b_v * tl.where(m_t, exp2(b_g_last - b_g), 0)[:, None]
             b_g_last = exp2(b_g_last)
             b_h1 *= b_g_last
@@ -249,29 +249,29 @@ def chunk_gated_delta_rule_fwd_kernel_h_blockdim64(
                     b_h4 *= exp2(b_gk_last4)[:, None]
         b_v = b_v.to(k.dtype.element_ty)
 
-        p_k = tl.make_block_ptr(k, (K, T), (1, H*K), (0, i_t * BT), (64, BT), (0, 1))
-        b_k = tl.load(p_k, boundary_check=(0, 1))
+        desc_k = make_tensor_descriptor(k, [T, K], [H*K, 1], [BT, 64])
+        b_k = tl.trans(desc_k.load([i_t * BT, 0]))
         if STATE_V_FIRST:
             b_h1 += tl.trans(tl.dot(b_k, b_v))
         else:
             b_h1 += tl.dot(b_k, b_v)
         if K > 64:
-            p_k = tl.make_block_ptr(k, (K, T), (1, H*K), (64, i_t * BT), (64, BT), (0, 1))
-            b_k = tl.load(p_k, boundary_check=(0, 1))
+            desc_k = make_tensor_descriptor(k, [T, K], [H*K, 1], [BT, 64])
+            b_k = tl.trans(desc_k.load([i_t * BT, 64]))
             if STATE_V_FIRST:
                 b_h2 += tl.trans(tl.dot(b_k, b_v))
             else:
                 b_h2 += tl.dot(b_k, b_v)
         if K > 128:
-            p_k = tl.make_block_ptr(k, (K, T), (1, H*K), (128, i_t * BT), (64, BT), (0, 1))
-            b_k = tl.load(p_k, boundary_check=(0, 1))
+            desc_k = make_tensor_descriptor(k, [T, K], [H*K, 1], [BT, 64])
+            b_k = tl.trans(desc_k.load([i_t * BT, 128]))
             if STATE_V_FIRST:
                 b_h3 += tl.trans(tl.dot(b_k, b_v))
             else:
                 b_h3 += tl.dot(b_k, b_v)
         if K > 192:
-            p_k = tl.make_block_ptr(k, (K, T), (1, H*K), (192, i_t * BT), (64, BT), (0, 1))
-            b_k = tl.load(p_k, boundary_check=(0, 1))
+            desc_k = make_tensor_descriptor(k, [T, K], [H*K, 1], [BT, 64])
+            b_k = tl.trans(desc_k.load([i_t * BT, 192]))
             if STATE_V_FIRST:
                 b_h4 += tl.trans(tl.dot(b_k, b_v))
             else:
@@ -279,28 +279,28 @@ def chunk_gated_delta_rule_fwd_kernel_h_blockdim64(
 
     if STORE_FINAL_STATE:
         if STATE_V_FIRST:
-            p_ht = tl.make_block_ptr(ht, (V, K), (K, 1), (i_v * BV, 0), (BV, 64), (1, 0))
+            desc_ht = make_tensor_descriptor(ht, [V, K], [K, 1], [BV, 64])
         else:
-            p_ht = tl.make_block_ptr(ht, (K, V), (V, 1), (0, i_v * BV), (64, BV), (1, 0))
-        tl.store(p_ht, b_h1.to(p_ht.dtype.element_ty), boundary_check=(0, 1))
+            desc_ht = make_tensor_descriptor(ht, [K, V], [V, 1], [64, BV])
+        desc_ht.store([0, i_v * BV], b_h1.to(desc_ht.dtype))
         if K > 64:
             if STATE_V_FIRST:
-                p_ht = tl.make_block_ptr(ht, (V, K), (K, 1), (i_v * BV, 64), (BV, 64), (1, 0))
+                desc_ht = make_tensor_descriptor(ht, [V, K], [K, 1], [BV, 64])
             else:
-                p_ht = tl.make_block_ptr(ht, (K, V), (V, 1), (64, i_v * BV), (64, BV), (1, 0))
-            tl.store(p_ht, b_h2.to(p_ht.dtype.element_ty), boundary_check=(0, 1))
+                desc_ht = make_tensor_descriptor(ht, [K, V], [V, 1], [64, BV])
+            desc_ht.store([64, i_v * BV], b_h2.to(desc_ht.dtype))
         if K > 128:
             if STATE_V_FIRST:
-                p_ht = tl.make_block_ptr(ht, (V, K), (K, 1), (i_v * BV, 128), (BV, 64), (1, 0))
+                desc_ht = make_tensor_descriptor(ht, [V, K], [K, 1], [BV, 64])
             else:
-                p_ht = tl.make_block_ptr(ht, (K, V), (V, 1), (128, i_v * BV), (64, BV), (1, 0))
-            tl.store(p_ht, b_h3.to(p_ht.dtype.element_ty), boundary_check=(0, 1))
+                desc_ht = make_tensor_descriptor(ht, [K, V], [V, 1], [64, BV])
+            desc_ht.store([128, i_v * BV], b_h3.to(desc_ht.dtype))
         if K > 192:
             if STATE_V_FIRST:
-                p_ht = tl.make_block_ptr(ht, (V, K), (K, 1), (i_v * BV, 192), (BV, 64), (1, 0))
+                desc_ht = make_tensor_descriptor(ht, [V, K], [K, 1], [BV, 64])
             else:
-                p_ht = tl.make_block_ptr(ht, (K, V), (V, 1), (192, i_v * BV), (64, BV), (1, 0))
-            tl.store(p_ht, b_h4.to(p_ht.dtype.element_ty), boundary_check=(0, 1))
+                desc_ht = make_tensor_descriptor(ht, [K, V], [V, 1], [64, BV])
+            desc_ht.store([192, i_v * BV], b_h4.to(desc_ht.dtype))
 
 
 @triton.heuristics({
@@ -397,71 +397,70 @@ def chunk_gated_delta_rule_bwd_kernel_dhu_blockdim64(
 
     if USE_FINAL_STATE_GRADIENT:
         if STATE_V_FIRST:
-            p_dht1 = tl.make_block_ptr(dht, (V, K), (K, 1), (i_v * BV, 0), (BV, 64), (1, 0))
+            desc_dht1 = make_tensor_descriptor(dht, [V, K], [K, 1], [BV, 64])
         else:
-            p_dht1 = tl.make_block_ptr(dht, (K, V), (V, 1), (0, i_v * BV), (64, BV), (1, 0))
-        b_dh1 += tl.load(p_dht1, boundary_check=(0, 1))
+            desc_dht1 = make_tensor_descriptor(dht, [K, V], [V, 1], [64, BV])
+        b_dh1 += desc_dht1.load([0, i_v * BV])
         if K > 64:
             if STATE_V_FIRST:
-                p_dht2 = tl.make_block_ptr(dht, (V, K), (K, 1), (i_v * BV, 64), (BV, 64), (1, 0))
+                desc_dht2 = make_tensor_descriptor(dht, [V, K], [K, 1], [BV, 64])
             else:
-                p_dht2 = tl.make_block_ptr(dht, (K, V), (V, 1), (64, i_v * BV), (64, BV), (1, 0))
-            b_dh2 += tl.load(p_dht2, boundary_check=(0, 1))
+                desc_dht2 = make_tensor_descriptor(dht, [K, V], [V, 1], [64, BV])
+            b_dh2 += desc_dht2.load([64, i_v * BV])
         if K > 128:
             if STATE_V_FIRST:
-                p_dht3 = tl.make_block_ptr(dht, (V, K), (K, 1), (i_v * BV, 128), (BV, 64), (1, 0))
+                desc_dht3 = make_tensor_descriptor(dht, [V, K], [K, 1], [BV, 64])
             else:
-                p_dht3 = tl.make_block_ptr(dht, (K, V), (V, 1), (128, i_v * BV), (64, BV), (1, 0))
-            b_dh3 += tl.load(p_dht3, boundary_check=(0, 1))
+                desc_dht3 = make_tensor_descriptor(dht, [K, V], [V, 1], [64, BV])
+            b_dh3 += desc_dht3.load([128, i_v * BV])
         if K > 192:
             if STATE_V_FIRST:
-                p_dht4 = tl.make_block_ptr(dht, (V, K), (K, 1), (i_v * BV, 192), (BV, 64), (1, 0))
+                desc_dht4 = make_tensor_descriptor(dht, [V, K], [K, 1], [BV, 64])
             else:
-                p_dht4 = tl.make_block_ptr(dht, (K, V), (V, 1), (192, i_v * BV), (64, BV), (1, 0))
-            b_dh4 += tl.load(p_dht4, boundary_check=(0, 1))
+                desc_dht4 = make_tensor_descriptor(dht, [K, V], [V, 1], [64, BV])
+            b_dh4 += desc_dht4.load([192, i_v * BV])
 
     for i_t in range(NT - 1, -1, -1):
         i_t_int64 = i_t.to(tl.int64)
         if STATE_V_FIRST:
-            p_dh1 = tl.make_block_ptr(dh + i_t_int64*HV*K*V, (V, K), (K, 1), (i_v * BV, 0), (BV, 64), (1, 0))
+            desc_dh1 = make_tensor_descriptor(dh + i_t_int64*HV*K*V, [V, K], [K, 1], [BV, 64])
         else:
-            p_dh1 = tl.make_block_ptr(dh + i_t_int64*HV*K*V, (K, V), (V, 1), (0, i_v * BV), (64, BV), (1, 0))
-        tl.store(p_dh1, b_dh1.to(p_dh1.dtype.element_ty), boundary_check=(0, 1))
+            desc_dh1 = make_tensor_descriptor(dh + i_t_int64*HV*K*V, [K, V], [V, 1], [64, BV])
+        desc_dh1.store([0, i_v * BV], b_dh1.to(desc_dh1.dtype))
         if K > 64:
             if STATE_V_FIRST:
-                p_dh2 = tl.make_block_ptr(dh + i_t_int64*HV*K*V, (V, K), (K, 1), (i_v * BV, 64), (BV, 64), (1, 0))
+                desc_dh2 = make_tensor_descriptor(dh + i_t_int64*HV*K*V, [V, K], [K, 1], [BV, 64])
             else:
-                p_dh2 = tl.make_block_ptr(dh + i_t_int64*HV*K*V, (K, V), (V, 1), (64, i_v * BV), (64, BV), (1, 0))
-            tl.store(p_dh2, b_dh2.to(p_dh2.dtype.element_ty), boundary_check=(0, 1))
+                desc_dh2 = make_tensor_descriptor(dh + i_t_int64*HV*K*V, [K, V], [V, 1], [64, BV])
+            desc_dh2.store([64, i_v * BV], b_dh2.to(desc_dh2.dtype))
         if K > 128:
             if STATE_V_FIRST:
-                p_dh3 = tl.make_block_ptr(dh + i_t_int64*HV*K*V, (V, K), (K, 1), (i_v * BV, 128), (BV, 64), (1, 0))
+                desc_dh3 = make_tensor_descriptor(dh + i_t_int64*HV*K*V, [V, K], [K, 1], [BV, 64])
             else:
-                p_dh3 = tl.make_block_ptr(dh + i_t_int64*HV*K*V, (K, V), (V, 1), (128, i_v * BV), (64, BV), (1, 0))
-            tl.store(p_dh3, b_dh3.to(p_dh3.dtype.element_ty), boundary_check=(0, 1))
+                desc_dh3 = make_tensor_descriptor(dh + i_t_int64*HV*K*V, [K, V], [V, 1], [64, BV])
+            desc_dh3.store([128, i_v * BV], b_dh3.to(desc_dh3.dtype))
         if K > 192:
             if STATE_V_FIRST:
-                p_dh4 = tl.make_block_ptr(dh + i_t_int64*HV*K*V, (V, K), (K, 1), (i_v * BV, 192), (BV, 64), (1, 0))
+                desc_dh4 = make_tensor_descriptor(dh + i_t_int64*HV*K*V, [V, K], [K, 1], [BV, 64])
             else:
-                p_dh4 = tl.make_block_ptr(dh + i_t_int64*HV*K*V, (K, V), (V, 1), (192, i_v * BV), (64, BV), (1, 0))
-            tl.store(p_dh4, b_dh4.to(p_dh4.dtype.element_ty), boundary_check=(0, 1))
+                desc_dh4 = make_tensor_descriptor(dh + i_t_int64*HV*K*V, [K, V], [V, 1], [64, BV])
+            desc_dh4.store([192, i_v * BV], b_dh4.to(desc_dh4.dtype))
 
         last_idx = min((i_t + 1) * BT, T) - 1
         if USE_G:
             bg_last = tl.load(g + (bos + last_idx) * HV + i_h).to(tl.float32)
-            p_g = tl.make_block_ptr(g + bos * HV + i_h, (T,), (HV,), (i_t * BT,), (BT,), (0,))
-            b_g = tl.load(p_g, boundary_check=(0,)).to(tl.float32)
+            b_g = tl.load(g + bos * HV + i_h + (i_t * BT + tl.arange(0, BT)) * HV, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0).to(tl.float32)
             bg_last_exp = exp2(bg_last)
             b_g_exp = exp2(b_g)
-        p_dv = tl.make_block_ptr(dv, (T, V), (HV*V, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
-        p_dv2 = tl.make_block_ptr(dv2, (T, V), (HV*V, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
-        p_do = tl.make_block_ptr(do, (T, V), (HV*V, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
+        desc_dv = make_tensor_descriptor(dv, [T, V], [HV*V, 1], [BT, BV])
+        desc_dv2 = make_tensor_descriptor(dv2, [T, V], [HV*V, 1], [BT, BV])
+        desc_do = make_tensor_descriptor(do, [T, V], [HV*V, 1], [BT, BV])
 
-        b_do = tl.load(p_do, boundary_check=(0, 1))
+        b_do = desc_do.load([i_t * BT, i_v * BV])
 
         # Update dv
-        p_k = tl.make_block_ptr(k, (T, K), (H*K, 1), (i_t * BT, 0), (BT, 64), (1, 0))
-        b_k = tl.load(p_k, boundary_check=(0, 1))
+        desc_k = make_tensor_descriptor(k, [T, K], [H*K, 1], [BT, 64])
+        b_k = desc_k.load([i_t * BT, 0])
         if USE_GK:
             o_k1 = tl.arange(0, 64)
             b_gk_last1 = tl.load(gk + last_idx * HV*K + o_k1, mask=(o_k1 < K), other=0.).to(tl.float32)
@@ -471,8 +470,8 @@ def chunk_gated_delta_rule_bwd_kernel_dhu_blockdim64(
             b_dv = tl.dot(b_k, b_dh1.to(b_k.dtype))
 
         if K > 64:
-            p_k = tl.make_block_ptr(k, (T, K), (H*K, 1), (i_t * BT, 64), (BT, 64), (1, 0))
-            b_k = tl.load(p_k, boundary_check=(0, 1))
+            desc_k = make_tensor_descriptor(k, [T, K], [H*K, 1], [BT, 64])
+            b_k = desc_k.load([i_t * BT, 64])
             if USE_GK:
                 o_k2 = 64 + o_k1
                 b_gk_last2 = tl.load(gk + last_idx * HV*K + o_k2, mask=(o_k2 < K), other=0.).to(tl.float32)
@@ -482,8 +481,8 @@ def chunk_gated_delta_rule_bwd_kernel_dhu_blockdim64(
                 b_dv += tl.dot(b_k, b_dh2.to(b_k.dtype))
 
         if K > 128:
-            p_k = tl.make_block_ptr(k, (T, K), (H*K, 1), (i_t * BT, 128), (BT, 64), (1, 0))
-            b_k = tl.load(p_k, boundary_check=(0, 1))
+            desc_k = make_tensor_descriptor(k, [T, K], [H*K, 1], [BT, 64])
+            b_k = desc_k.load([i_t * BT, 128])
             if USE_GK:
                 o_k3 = 128 + o_k1
                 b_gk_last3 = tl.load(gk + last_idx * HV*K + o_k3, mask=(o_k3 < K), other=0.).to(tl.float32)
@@ -493,8 +492,8 @@ def chunk_gated_delta_rule_bwd_kernel_dhu_blockdim64(
                 b_dv += tl.dot(b_k, b_dh3.to(b_k.dtype))
 
         if K > 192:
-            p_k = tl.make_block_ptr(k, (T, K), (H*K, 1), (i_t * BT, 192), (BT, 64), (1, 0))
-            b_k = tl.load(p_k, boundary_check=(0, 1))
+            desc_k = make_tensor_descriptor(k, [T, K], [H*K, 1], [BT, 64])
+            b_k = desc_k.load([i_t * BT, 192])
             if USE_GK:
                 o_k4 = 192 + o_k1
                 b_gk_last4 = tl.load(gk + last_idx * HV*K + o_k4, mask=(o_k4 < K), other=0.).to(tl.float32)
@@ -506,14 +505,14 @@ def chunk_gated_delta_rule_bwd_kernel_dhu_blockdim64(
         if USE_G:
             m_t = (i_t * BT + tl.arange(0, BT)) < T
             b_dv *= tl.where(m_t, exp2(bg_last - b_g), 0)[:, None]
-        b_dv += tl.load(p_dv, boundary_check=(0, 1))
+        b_dv += desc_dv.load([i_t * BT, i_v * BV])
 
-        tl.store(p_dv2, b_dv.to(p_dv.dtype.element_ty), boundary_check=(0, 1))
+        desc_dv2.store([i_t * BT, i_v * BV], b_dv.to(desc_dv.dtype))
         # Update dh
-        p_w = tl.make_block_ptr(w, (K, T), (1, HV*K), (0, i_t * BT), (64, BT), (0, 1))
-        p_q = tl.make_block_ptr(q, (K, T), (1, H*K), (0, i_t * BT), (64, BT), (0, 1))
-        b_w = tl.load(p_w, boundary_check=(0, 1))
-        b_q = tl.load(p_q, boundary_check=(0, 1))
+        desc_w = make_tensor_descriptor(w, [T, K], [HV*K, 1], [BT, 64])
+        desc_q = make_tensor_descriptor(q, [T, K], [H*K, 1], [BT, 64])
+        b_w = tl.trans(desc_w.load([i_t * BT, 0]))
+        b_q = tl.trans(desc_q.load([i_t * BT, 0]))
         if USE_G:
             b_dh1 *= bg_last_exp
             b_q = b_q * b_g_exp[None, :]
@@ -527,10 +526,10 @@ def chunk_gated_delta_rule_bwd_kernel_dhu_blockdim64(
         else:
             b_dh1 += tl.dot(b_q.to(b_q.dtype), b_do.to(b_q.dtype)) * scale - tl.dot(b_w, b_dv.to(b_w.dtype))
         if K > 64:
-            p_q = tl.make_block_ptr(q, (K, T), (1, H*K), (64, i_t * BT), (64, BT), (0, 1))
-            p_w = tl.make_block_ptr(w, (K, T), (1, HV*K), (64, i_t * BT), (64, BT), (0, 1))
-            b_q = tl.load(p_q, boundary_check=(0, 1))
-            b_w = tl.load(p_w, boundary_check=(0, 1))
+            desc_q = make_tensor_descriptor(q, [T, K], [H*K, 1], [BT, 64])
+            desc_w = make_tensor_descriptor(w, [T, K], [HV*K, 1], [BT, 64])
+            b_q = tl.trans(desc_q.load([i_t * BT, 64]))
+            b_w = tl.trans(desc_w.load([i_t * BT, 64]))
             if USE_G:
                 b_dh2 *= bg_last_exp
                 b_q = b_q * b_g_exp[None, :]
@@ -544,10 +543,10 @@ def chunk_gated_delta_rule_bwd_kernel_dhu_blockdim64(
             else:
                 b_dh2 += tl.dot(b_q.to(b_q.dtype), b_do.to(b_q.dtype)) * scale - tl.dot(b_w, b_dv.to(b_w.dtype))
         if K > 128:
-            p_q = tl.make_block_ptr(q, (K, T), (1, H*K), (128, i_t * BT), (64, BT), (0, 1))
-            p_w = tl.make_block_ptr(w, (K, T), (1, HV*K), (128, i_t * BT), (64, BT), (0, 1))
-            b_q = tl.load(p_q, boundary_check=(0, 1))
-            b_w = tl.load(p_w, boundary_check=(0, 1))
+            desc_q = make_tensor_descriptor(q, [T, K], [H*K, 1], [BT, 64])
+            desc_w = make_tensor_descriptor(w, [T, K], [HV*K, 1], [BT, 64])
+            b_q = tl.trans(desc_q.load([i_t * BT, 128]))
+            b_w = tl.trans(desc_w.load([i_t * BT, 128]))
             if USE_G:
                 b_dh3 *= bg_last_exp
                 b_q = b_q * b_g_exp[None, :]
@@ -561,10 +560,10 @@ def chunk_gated_delta_rule_bwd_kernel_dhu_blockdim64(
             else:
                 b_dh3 += tl.dot(b_q.to(b_q.dtype), b_do.to(b_q.dtype)) * scale - tl.dot(b_w, b_dv.to(b_w.dtype))
         if K > 192:
-            p_q = tl.make_block_ptr(q, (K, T), (1, H*K), (192, i_t * BT), (64, BT), (0, 1))
-            p_w = tl.make_block_ptr(w, (K, T), (1, HV*K), (192, i_t * BT), (64, BT), (0, 1))
-            b_q = tl.load(p_q, boundary_check=(0, 1))
-            b_w = tl.load(p_w, boundary_check=(0, 1))
+            desc_q = make_tensor_descriptor(q, [T, K], [H*K, 1], [BT, 64])
+            desc_w = make_tensor_descriptor(w, [T, K], [HV*K, 1], [BT, 64])
+            b_q = tl.trans(desc_q.load([i_t * BT, 192]))
+            b_w = tl.trans(desc_w.load([i_t * BT, 192]))
             if USE_G:
                 b_dh4 *= bg_last_exp
                 b_q = b_q * b_g_exp[None, :]
@@ -580,28 +579,28 @@ def chunk_gated_delta_rule_bwd_kernel_dhu_blockdim64(
 
     if USE_INITIAL_STATE:
         if STATE_V_FIRST:
-            p_dh0 = tl.make_block_ptr(dh0, (V, K), (K, 1), (i_v * BV, 0), (BV, 64), (1, 0))
+            desc_dh0 = make_tensor_descriptor(dh0, [V, K], [K, 1], [BV, 64])
         else:
-            p_dh0 = tl.make_block_ptr(dh0, (K, V), (V, 1), (0, i_v * BV), (64, BV), (1, 0))
-        tl.store(p_dh0, b_dh1.to(p_dh0.dtype.element_ty), boundary_check=(0, 1))
+            desc_dh0 = make_tensor_descriptor(dh0, [K, V], [V, 1], [64, BV])
+        desc_dh0.store([0, i_v * BV], b_dh1.to(desc_dh0.dtype))
         if K > 64:
             if STATE_V_FIRST:
-                p_dh1 = tl.make_block_ptr(dh0, (V, K), (K, 1), (i_v * BV, 64), (BV, 64), (1, 0))
+                desc_dh1 = make_tensor_descriptor(dh0, [V, K], [K, 1], [BV, 64])
             else:
-                p_dh1 = tl.make_block_ptr(dh0, (K, V), (V, 1), (64, i_v * BV), (64, BV), (1, 0))
-            tl.store(p_dh1, b_dh2.to(p_dh1.dtype.element_ty), boundary_check=(0, 1))
+                desc_dh1 = make_tensor_descriptor(dh0, [K, V], [V, 1], [64, BV])
+            desc_dh1.store([64, i_v * BV], b_dh2.to(desc_dh1.dtype))
         if K > 128:
             if STATE_V_FIRST:
-                p_dh2 = tl.make_block_ptr(dh0, (V, K), (K, 1), (i_v * BV, 128), (BV, 64), (1, 0))
+                desc_dh2 = make_tensor_descriptor(dh0, [V, K], [K, 1], [BV, 64])
             else:
-                p_dh2 = tl.make_block_ptr(dh0, (K, V), (V, 1), (128, i_v * BV), (64, BV), (1, 0))
-            tl.store(p_dh2, b_dh3.to(p_dh2.dtype.element_ty), boundary_check=(0, 1))
+                desc_dh2 = make_tensor_descriptor(dh0, [K, V], [V, 1], [64, BV])
+            desc_dh2.store([128, i_v * BV], b_dh3.to(desc_dh2.dtype))
         if K > 192:
             if STATE_V_FIRST:
-                p_dh3 = tl.make_block_ptr(dh0, (V, K), (K, 1), (i_v * BV, 192), (BV, 64), (1, 0))
+                desc_dh3 = make_tensor_descriptor(dh0, [V, K], [K, 1], [BV, 64])
             else:
-                p_dh3 = tl.make_block_ptr(dh0, (K, V), (V, 1), (192, i_v * BV), (64, BV), (1, 0))
-            tl.store(p_dh3, b_dh4.to(p_dh3.dtype.element_ty), boundary_check=(0, 1))
+                desc_dh3 = make_tensor_descriptor(dh0, [K, V], [V, 1], [64, BV])
+            desc_dh3.store([192, i_v * BV], b_dh4.to(desc_dh3.dtype))
 
 
 @dispatch('common')

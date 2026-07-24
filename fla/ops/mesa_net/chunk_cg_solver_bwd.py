@@ -11,6 +11,7 @@ import triton.language as tl
 
 from fla.ops.utils import prepare_chunk_indices
 from fla.ops.utils.op import exp2
+from fla.ops.utils.op import make_tensor_descriptor
 
 
 @triton.jit()
@@ -79,20 +80,18 @@ def chunk_fwd_mesa_cg_dim64_kernel(
     beta += bos * H + i_h
     lamb += i_h * K
 
-    p_q = tl.make_block_ptr(dq, (T, K), (H*K, 1), (i_t * BT, 0), (BT, BK), (1, 0))
-    p_k = tl.make_block_ptr(k, (T, K), (H*K, 1), (i_t * BT, 0), (BT, BK), (1, 0))
-    p_h = tl.make_block_ptr(h, (K, K), (K, 1), (0, 0), (BK, BK), (1, 0))
+    desc_q = make_tensor_descriptor(dq, [T, K], [H*K, 1], [BT, BK])
+    desc_k = make_tensor_descriptor(k, [T, K], [H*K, 1], [BT, BK])
+    desc_h = make_tensor_descriptor(h, [K, K], [K, 1], [BK, BK])
 
-    b_h = tl.load(p_h, boundary_check=(0, 1))
-    b_k = tl.load(p_k, boundary_check=(0, 1))
-    b_q = tl.load(p_q, boundary_check=(0, 1)).to(tl.float32)
+    b_h = desc_h.load([0, 0])
+    b_k = desc_k.load([i_t * BT, 0])
+    b_q = desc_q.load([i_t * BT, 0]).to(tl.float32)
 
-    p_g = tl.make_block_ptr(g, (T,), (H,), (i_t * BT,), (BT,), (0,))
-    b_g = tl.load(p_g, boundary_check=(0,)).to(tl.float32)
-    p_beta = tl.make_block_ptr(beta, (T,), (H,), (i_t * BT,), (BT,), (0,))
-    b_beta = tl.load(p_beta, boundary_check=(0,)).to(tl.float32)
-    p_lamb = tl.make_block_ptr(lamb, (K,), (1,), (0,), (BK,), (0,))
-    b_lamb = tl.load(p_lamb, boundary_check=(0,)).to(tl.float32)
+    b_g = tl.load(g + (i_t * BT + tl.arange(0, BT)) * H, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0).to(tl.float32)
+    b_beta = tl.load(beta + (i_t * BT + tl.arange(0, BT)) * H, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0).to(tl.float32)
+    desc_lamb = make_tensor_descriptor(lamb, [K], [1], [BK])
+    b_lamb = desc_lamb.load([0]).to(tl.float32)
 
     b_m = exp2(b_g[:, None] - b_g[None, :]) * b_beta[None, :]
     b_m = tl.where((o_t[:, None] >= o_t[None, :]) & (m_t[:, None] & m_t[None, :]), b_m, 0)
@@ -115,8 +114,8 @@ def chunk_fwd_mesa_cg_dim64_kernel(
         b_p = b_r + (b_delta_new / (b_delta_old + 1e-5))[:, None] * b_p
         b_delta_old = b_delta_new
 
-    p_q_final = tl.make_block_ptr(dq_final, (T, K), (H*K, 1), (i_t * BT, 0), (BT, BK), (1, 0))
-    tl.store(p_q_final, b_x.to(p_q_final.dtype.element_ty), boundary_check=(0, 1))
+    desc_q_final = make_tensor_descriptor(dq_final, [T, K], [H*K, 1], [BT, BK])
+    desc_q_final.store([i_t * BT, 0], b_x.to(desc_q_final.dtype))
 
 
 def chunk_mesa_cg_bwd(

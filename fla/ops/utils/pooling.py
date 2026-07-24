@@ -10,6 +10,7 @@ import triton
 import triton.language as tl
 
 from fla.ops.utils.index import prepare_chunk_indices
+from fla.ops.utils.op import make_tensor_descriptor
 from fla.utils import autocast_custom_bwd, autocast_custom_fwd, autotune_cache_kwargs, input_guard
 
 
@@ -51,13 +52,13 @@ def mean_pooling_fwd_kernel(
         i_tg = i_b * NT + i_t
         bos, eos = i_b * T, i_b * T + T
 
-    p_x = tl.make_block_ptr(x + (bos * H + i_h) * D, (T, D), (H*D, 1), (i_t * BT, i_d * BD), (BT, BD), (1, 0))
-    p_o = tl.make_block_ptr(o + (i_tg * H + i_h) * D, (D,), (1,), (i_d * BD,), (BD,), (0,))
+    desc_x = make_tensor_descriptor(x + (bos * H + i_h) * D, [T, D], [H*D, 1], [BT, BD])
+    desc_o = make_tensor_descriptor(o + (i_tg * H + i_h) * D, [D], [1], [BD])
     # [BT, BD]
-    b_x = tl.load(p_x, boundary_check=(0, 1)).to(tl.float32)
+    b_x = desc_x.load([i_t * BT, i_d * BD]).to(tl.float32)
     # [BD]
     b_o = tl.sum(b_x, axis=0) / min(BT, T - i_t * BT)
-    tl.store(p_o, b_o.to(p_o.dtype.element_ty), boundary_check=(0,))
+    desc_o.store([i_d * BD], b_o.to(desc_o.dtype))
 
 
 @triton.heuristics({
@@ -98,13 +99,13 @@ def mean_pooling_bwd_kernel(
         i_tg = i_b * NT + i_t
         bos, eos = i_b * T, i_b * T + T
 
-    p_dx = tl.make_block_ptr(dx + (bos * H + i_h) * D, (T, D), (H*D, 1), (i_t * BT, i_d * BD), (BT, BD), (1, 0))
-    p_do = tl.make_block_ptr(do + (i_tg * H + i_h) * D, (D,), (1,), (i_d * BD,), (BD,), (0,))
+    desc_dx = make_tensor_descriptor(dx + (bos * H + i_h) * D, [T, D], [H*D, 1], [BT, BD])
+    desc_do = make_tensor_descriptor(do + (i_tg * H + i_h) * D, [D], [1], [BD])
     # [BD]
-    b_do = tl.load(p_do, boundary_check=(0,)).to(tl.float32)
+    b_do = desc_do.load([i_d * BD]).to(tl.float32)
     # [BT, BD]
     b_dx = b_do / tl.full((BT,), min(BT, T - i_t * BT), dtype=tl.float32)[:, None]
-    tl.store(p_dx, b_dx.to(p_dx.dtype.element_ty), boundary_check=(0, 1))
+    desc_dx.store([i_t * BT, i_d * BD], b_dx.to(desc_dx.dtype))
 
 
 def mean_pooling_fwd(

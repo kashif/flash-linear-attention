@@ -11,6 +11,7 @@ import triton.language as tl
 from einops import rearrange
 
 from fla.ops.delta_rule.wy_fast import fwd_prepare_T
+from fla.ops.utils.op import make_tensor_descriptor
 from fla.utils import autocast_custom_bwd, autocast_custom_fwd, autotune_cache_kwargs, input_guard
 
 
@@ -44,15 +45,15 @@ def chunk_transform_qk_fwd_kernel(
 ):
     i_t, i_bh = tl.program_id(0), tl.program_id(1)
 
-    p_q = tl.make_block_ptr(q + i_bh * T*K, (T, K), (K, 1), (i_t * BT, 0), (BT, BK), (1, 0))
-    p_k = tl.make_block_ptr(k + i_bh * T*K, (T, K), (K, 1), (i_t * BT, 0), (BT, BK), (1, 0))
-    p_v = tl.make_block_ptr(v + i_bh * T*V, (T, V), (V, 1), (i_t * BT, 0), (BT, BV), (1, 0))
-    b_q = (tl.load(p_q, boundary_check=(0, 1)) * scale).to(p_q.dtype.element_ty)
-    b_k = tl.load(p_k, boundary_check=(0, 1))
-    b_v = tl.load(p_v, boundary_check=(0, 1))
+    desc_q = make_tensor_descriptor(q + i_bh * T*K, [T, K], [K, 1], [BT, BK])
+    desc_k = make_tensor_descriptor(k + i_bh * T*K, [T, K], [K, 1], [BT, BK])
+    desc_v = make_tensor_descriptor(v + i_bh * T*V, [T, V], [V, 1], [BT, BV])
+    b_q = (desc_q.load([i_t * BT, 0]) * scale).to(desc_q.dtype)
+    b_k = desc_k.load([i_t * BT, 0])
+    b_v = desc_v.load([i_t * BT, 0])
 
-    p_T = tl.make_block_ptr(A + i_bh * T * BT, (T, BT), (BT, 1), (i_t * BT, 0), (BT, BT), (1, 0))
-    b_T = tl.load(p_T, boundary_check=(0, 1))
+    desc_T = make_tensor_descriptor(A + i_bh * T * BT, [T, BT], [BT, 1], [BT, BT])
+    b_T = desc_T.load([i_t * BT, 0])
 
     o_i = tl.arange(0, BT)
     m_t = o_i[:, None] >= o_i[None, :]
@@ -60,26 +61,26 @@ def chunk_transform_qk_fwd_kernel(
     m_t = o_i[:, None] > o_i[None, :]
     b_kk = tl.where(m_t, tl.dot(b_k, tl.trans(b_k), allow_tf32=False), 0).to(b_k.dtype)
 
-    p_beta = tl.make_block_ptr(beta + i_bh * T, (T, ), (1, ), (i_t * BT, ), (BT, ), (0, ))
-    b_beta = tl.load(p_beta, boundary_check=(0, ))
+    desc_beta = make_tensor_descriptor(beta + i_bh * T, [T], [1], [BT])
+    b_beta = desc_beta.load([i_t * BT])
     b_k_beta = (b_k * b_beta[:, None]).to(b_k.dtype)
 
     b_qkT = tl.dot(b_qk, b_T, allow_tf32=False).to(b_k.dtype)
 
     if OUTPUT_ATTENTIONS:
-        p_a = tl.make_block_ptr(A_local + i_bh * T * BT, (T, BT), (BT, 1), (i_t * BT, 0), (BT, BT), (1, 0))
-        tl.store(p_a, b_qkT.to(p_a.dtype.element_ty), boundary_check=(0, 1))
+        desc_a = make_tensor_descriptor(A_local + i_bh * T * BT, [T, BT], [BT, 1], [BT, BT])
+        desc_a.store([i_t * BT, 0], b_qkT.to(desc_a.dtype))
 
     b_kkT = tl.dot(b_kk, b_T, allow_tf32=False).to(b_k.dtype)
-    p_o = tl.make_block_ptr(o + i_bh * T*V, (T, V), (V, 1), (i_t * BT, 0), (BT, BV), (1, 0))
-    tl.store(p_o, tl.dot(b_qkT, b_v).to(p_o.dtype.element_ty), boundary_check=(0, 1))
+    desc_o = make_tensor_descriptor(o + i_bh * T*V, [T, V], [V, 1], [BT, BV])
+    desc_o.store([i_t * BT, 0], tl.dot(b_qkT, b_v).to(desc_o.dtype))
 
-    p_q_new = tl.make_block_ptr(q_new + i_bh * T*K, (T, K), (K, 1), (i_t * BT, 0), (BT, BK), (1, 0))
-    tl.store(p_q_new, (b_q - tl.dot(b_qkT, b_k_beta, allow_tf32=False)).to(p_q_new.dtype.element_ty), boundary_check=(0, 1))
+    desc_q_new = make_tensor_descriptor(q_new + i_bh * T*K, [T, K], [K, 1], [BT, BK])
+    desc_q_new.store([i_t * BT, 0], (b_q - tl.dot(b_qkT, b_k_beta, allow_tf32=False)).to(desc_q_new.dtype))
 
-    p_k_new = tl.make_block_ptr(k_new + i_bh * T*K, (T, K), (K, 1), (i_t * BT, 0), (BT, BK), (1, 0))
+    desc_k_new = make_tensor_descriptor(k_new + i_bh * T*K, [T, K], [K, 1], [BT, BK])
     b_k_new = b_k - tl.dot(tl.trans(b_kkT), b_k_beta, allow_tf32=False)
-    tl.store(p_k_new, b_k_new.to(p_k_new.dtype.element_ty), boundary_check=(0, 1))
+    desc_k_new.store([i_t * BT, 0], b_k_new.to(desc_k_new.dtype))
 
 
 def chunk_transform_qk_fwd(
@@ -138,10 +139,10 @@ def save_intra_chunk_attn(
     BT: tl.constexpr,
 ):
     i_t, i_bh = tl.program_id(0), tl.program_id(1)
-    p_A = tl.make_block_ptr(A + i_bh * T * T, (T, T), (T, 1), (i_t * BT, i_t * BT), (BT, BT), (1, 0))
-    p_A_local = tl.make_block_ptr(A_local + i_bh * T * BT, (T, BT), (BT, 1), (i_t * BT, 0), (BT, BT), (1, 0))
-    b_A_local = tl.load(p_A_local, boundary_check=(0, 1))
-    tl.store(p_A, b_A_local.to(p_A.dtype.element_ty), boundary_check=(0, 1))
+    desc_A = make_tensor_descriptor(A + i_bh * T * T, [T, T], [T, 1], [BT, BT])
+    desc_A_local = make_tensor_descriptor(A_local + i_bh * T * BT, [T, BT], [BT, 1], [BT, BT])
+    b_A_local = desc_A_local.load([i_t * BT, 0])
+    desc_A.store([i_t * BT, i_t * BT], b_A_local.to(desc_A.dtype))
 
 
 @triton.heuristics({
@@ -167,71 +168,71 @@ def parallel_delta_rule_fwd_kernel(
     OUTPUT_ATTENTIONS: tl.constexpr,
 ):
     i_t, i_bh = tl.program_id(0), tl.program_id(1)
-    p_q = tl.make_block_ptr(q + i_bh * T*K, (T, K), (K, 1), (i_t * BT, 0), (BT, BK), (1, 0))
+    desc_q = make_tensor_descriptor(q + i_bh * T*K, [T, K], [K, 1], [BT, BK])
 
     # the Q block is kept in the shared memory throughout the whole kernel
     # [BT, BK]
     b_q = tl.zeros([BT, BK], dtype=tl.float32)
-    b_q += tl.load(p_q, boundary_check=(0, 1))
+    b_q += desc_q.load([i_t * BT, 0])
 
     b_o = tl.zeros([BT, BV], dtype=tl.float32)
-    p_o = tl.make_block_ptr(o + i_bh * T*V, (T, V), (V, 1), (i_t * BT, 0), (BT, BV), (1, 0))
-    b_o += tl.load(p_o, boundary_check=(0, 1))
+    desc_o = make_tensor_descriptor(o + i_bh * T*V, [T, V], [V, 1], [BT, BV])
+    b_o += desc_o.load([i_t * BT, 0])
 
     # As opposed to Flashattention, this kernel requires scanning the KV blocks from right to left
     # Q block and K block have overlap.
     # masks required
     for offset in range((i_t + 1) * BT - 2 * BS, i_t * BT - BS, -BS):
-        p_k = tl.make_block_ptr(k + i_bh * T*K, (K, T), (1, K), (0, offset), (BK, BS), (0, 1))
-        p_k2 = tl.make_block_ptr(k2 + i_bh * T*K, (T, K), (K, 1), (offset, 0), (BS, BK), (1, 0))
-        p_v = tl.make_block_ptr(v + i_bh * T*V, (T, V), (V, 1), (offset, 0), (BS, BV), (1, 0))
-        p_beta = tl.make_block_ptr(beta + i_bh * T, (T, ), (1, ), (offset, ), (BS, ), (0,))
+        desc_k = make_tensor_descriptor(k + i_bh * T*K, [T, K], [K, 1], [BS, BK])
+        desc_k2 = make_tensor_descriptor(k2 + i_bh * T*K, [T, K], [K, 1], [BS, BK])
+        desc_v = make_tensor_descriptor(v + i_bh * T*V, [T, V], [V, 1], [BS, BV])
+        desc_beta = make_tensor_descriptor(beta + i_bh * T, [T], [1], [BS])
         # [BK, BS]
-        b_k = tl.load(p_k, boundary_check=(0, 1))
+        b_k = tl.trans(desc_k.load([offset, 0]))
         # [BS, BV]
-        b_v = tl.load(p_v, boundary_check=(0, 1))
+        b_v = desc_v.load([offset, 0])
         # [BS]
-        b_beta = tl.load(p_beta, boundary_check=(0,))
+        b_beta = desc_beta.load([offset])
         # [BT, BS]
         m_s = tl.arange(0, BT) >= (offset - i_t*BT + BS)
         b_s = tl.dot(b_q.to(b_k.dtype), b_k, allow_tf32=False)
         b_s = tl.where(m_s[:, None], b_s, 0)
 
         b_o += tl.dot(b_s.to(b_v.dtype), b_v, allow_tf32=False)
-        b_k2 = (tl.load(p_k2, boundary_check=(0, 1)) * b_beta[:, None]).to(b_v.dtype)
+        b_k2 = (desc_k2.load([offset, 0]) * b_beta[:, None]).to(b_v.dtype)
         b_q -= tl.dot(b_s.to(b_v.dtype), b_k2, allow_tf32=False)
 
         if OUTPUT_ATTENTIONS:
-            p_a = tl.make_block_ptr(attn + i_bh * T * T, (T, T), (T, 1), (i_t * BT, offset), (BT, BS), (1, 0))
-            tl.store(p_a, b_s.to(p_a.dtype.element_ty), boundary_check=(0, 1))
+            desc_a = make_tensor_descriptor(attn + i_bh * T * T, [T, T], [T, 1], [BT, BS])
+            desc_a.store([i_t * BT, offset], b_s.to(desc_a.dtype))
 
     # Q block and K block have no overlap
     # no need for mask, thereby saving flops
     for offset in range(i_t * BT - BS, -BS, -BS):
-        p_k = tl.make_block_ptr(k + i_bh * T*K, (K, T), (1, K), (0, offset), (BK, BS), (0, 1))
-        p_v = tl.make_block_ptr(v + i_bh * T*V, (T, V), (V, 1), (offset, 0), (BS, BV), (1, 0))
-        p_beta = tl.make_block_ptr(beta + i_bh * T, (T, ), (1, ), (offset, ), (BS, ), (0,))
-        p_k2 = tl.make_block_ptr(k2 + i_bh * T*K, (T, K), (K, 1), (offset, 0), (BS, BK), (1, 0))
+        desc_k = make_tensor_descriptor(k + i_bh * T*K, [T, K], [K, 1], [BS, BK])
+        desc_v = make_tensor_descriptor(v + i_bh * T*V, [T, V], [V, 1], [BS, BV])
+        desc_beta = make_tensor_descriptor(beta + i_bh * T, [T], [1], [BS])
+        desc_k2 = make_tensor_descriptor(k2 + i_bh * T*K, [T, K], [K, 1], [BS, BK])
 
         # [BK, BS]
-        b_k = tl.load(p_k, boundary_check=(0, 1))
+        b_k = tl.trans(desc_k.load([offset, 0]))
         # [BS, BV]
-        b_v = tl.load(p_v, boundary_check=(0, 1))
+        b_v = desc_v.load([offset, 0])
         # [BS]
-        b_beta = tl.load(p_beta, boundary_check=(0,))
+        b_beta = desc_beta.load([offset])
         # [BT, BS]
         b_s = (tl.dot(b_q.to(b_k.dtype), b_k, allow_tf32=False))
         # [BT, BV]
         b_o += tl.dot(b_s.to(b_v.dtype), b_v, allow_tf32=False)
-        b_k2 = (tl.load(p_k2, boundary_check=(0, 1)) * b_beta[:, None]).to(b_v.dtype)
+        b_k2 = (desc_k2.load([offset, 0]) * b_beta[:, None]).to(b_v.dtype)
         b_q -= tl.dot(b_s.to(b_v.dtype), b_k2, allow_tf32=False).to(b_q.dtype)
 
         if OUTPUT_ATTENTIONS:
-            p_a = tl.make_block_ptr(attn + i_bh * T * T, (T, T), (T, 1), (i_t * BT, offset), (BT, BS), (1, 0))
-            tl.store(p_a, b_s.to(p_a.dtype.element_ty), boundary_check=(0, 1))
+            desc_a = make_tensor_descriptor(attn + i_bh * T * T, [T, T], [T, 1], [BT, BS])
+            desc_a.store([i_t * BT, offset], b_s.to(desc_a.dtype))
 
-    p_o_new = tl.make_block_ptr(o_new + i_bh * T*V, (T, V), (V, 1), (i_t*BT, 0), (BT, BV), (1, 0))
-    tl.store(p_o_new, b_o.to(p_o.dtype.element_ty), boundary_check=(0, 1))
+    desc_o_new = make_tensor_descriptor(o_new + i_bh * T*V, [T, V], [V, 1], [BT, BV])
+    desc_o_new.store([i_t*BT, 0], b_o.to(desc_o.dtype))
 
 
 class ParallelDeltaRuleFunction(torch.autograd.Function):

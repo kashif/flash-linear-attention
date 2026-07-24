@@ -14,6 +14,7 @@ import triton.language as tl
 from fla.ops.backends import dispatch
 from fla.ops.utils.cache import fla_cache_autotune
 from fla.ops.utils.op import exp2
+from fla.ops.utils.op import make_tensor_descriptor
 from fla.utils import autotune_cache_kwargs
 
 
@@ -105,15 +106,13 @@ def chunk_kda_fwd_kernel_intra_token_parallel(
     b_k = tl.load(k + i_t * H * K + p_qk, mask=m_hk, other=0).to(tl.float32)
 
     # g: [B, T, HV, K], beta: [B, T, HV]
-    p_g = tl.make_block_ptr(g + i_t * HV * K, (HV, K), (K, 1), (i_hg * BH, 0), (BH, BK), (1, 0))
-    p_beta = tl.make_block_ptr(beta + i_t * HV, (HV,), (1,), (i_hg * BH,), (BH,), (0,))
-    b_g = tl.load(p_g, boundary_check=(0, 1)).to(tl.float32)
-    b_k = b_k * tl.load(p_beta, boundary_check=(0,)).to(tl.float32)[:, None]
+    p_gk = o_hv[:, None] * K + o_k[None, :]
+    b_g = tl.load(g + i_t * HV * K + p_gk, mask=m_hk, other=0).to(tl.float32)
+    b_k = b_k * tl.load(beta + i_t * HV + o_hv, mask=m_hv, other=0).to(tl.float32)[:, None]
 
     for j in range(i_ts, min(i_t + 1, min(T, i_ts + BC))):
         b_kj = tl.load(k + j * H * K + p_qk, mask=m_hk, other=0).to(tl.float32)
-        p_gj = tl.make_block_ptr(g + j * HV * K, (HV, K), (K, 1), (i_hg * BH, 0), (BH, BK), (1, 0))
-        b_gj = tl.load(p_gj, boundary_check=(0, 1)).to(tl.float32)
+        b_gj = tl.load(g + j * HV * K + p_gk, mask=m_hk, other=0).to(tl.float32)
 
         b_kgj = tl.where(m_k[None, :], b_kj * exp2(b_g - b_gj), 0.0)
         b_Aqk = tl.sum(b_q * b_kgj, axis=1) * scale

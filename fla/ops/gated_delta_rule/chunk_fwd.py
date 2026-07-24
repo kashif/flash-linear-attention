@@ -15,6 +15,7 @@ from fla.ops.gated_delta_rule.wy_fast import recompute_w_u_fwd
 from fla.ops.utils import prepare_chunk_indices, solve_tril
 from fla.ops.utils.cache import fla_cache_autotune
 from fla.ops.utils.op import exp2
+from fla.ops.utils.op import make_tensor_descriptor
 from fla.utils import IS_TF32_SUPPORTED, autotune_cache_kwargs
 
 if IS_TF32_SUPPORTED:
@@ -95,26 +96,18 @@ def chunk_gated_delta_rule_fwd_kkt_solve_kernel(
     m_tc3 = (i_tc3 + o_i) < T
 
     # load beta for each sub-chunk
-    p_b0 = tl.make_block_ptr(beta + bos * HV + i_h, (T,), (HV,), (i_tc0,), (BC,), (0,))
-    p_b1 = tl.make_block_ptr(beta + bos * HV + i_h, (T,), (HV,), (i_tc1,), (BC,), (0,))
-    p_b2 = tl.make_block_ptr(beta + bos * HV + i_h, (T,), (HV,), (i_tc2,), (BC,), (0,))
-    p_b3 = tl.make_block_ptr(beta + bos * HV + i_h, (T,), (HV,), (i_tc3,), (BC,), (0,))
-    b_b0 = tl.load(p_b0, boundary_check=(0,)).to(tl.float32)
-    b_b1 = tl.load(p_b1, boundary_check=(0,)).to(tl.float32)
-    b_b2 = tl.load(p_b2, boundary_check=(0,)).to(tl.float32)
-    b_b3 = tl.load(p_b3, boundary_check=(0,)).to(tl.float32)
+    b_b0 = tl.load(beta + bos * HV + i_h + (i_tc0 + tl.arange(0, BC)) * HV, mask=(i_tc0 + tl.arange(0, BC)) < T, other=0).to(tl.float32)
+    b_b1 = tl.load(beta + bos * HV + i_h + (i_tc1 + tl.arange(0, BC)) * HV, mask=(i_tc1 + tl.arange(0, BC)) < T, other=0).to(tl.float32)
+    b_b2 = tl.load(beta + bos * HV + i_h + (i_tc2 + tl.arange(0, BC)) * HV, mask=(i_tc2 + tl.arange(0, BC)) < T, other=0).to(tl.float32)
+    b_b3 = tl.load(beta + bos * HV + i_h + (i_tc3 + tl.arange(0, BC)) * HV, mask=(i_tc3 + tl.arange(0, BC)) < T, other=0).to(tl.float32)
 
     # load gate if used
     if USE_G:
-        p_g0 = tl.make_block_ptr(g + bos * HV + i_h, (T,), (HV,), (i_tc0,), (BC,), (0,))
-        p_g1 = tl.make_block_ptr(g + bos * HV + i_h, (T,), (HV,), (i_tc1,), (BC,), (0,))
-        p_g2 = tl.make_block_ptr(g + bos * HV + i_h, (T,), (HV,), (i_tc2,), (BC,), (0,))
-        p_g3 = tl.make_block_ptr(g + bos * HV + i_h, (T,), (HV,), (i_tc3,), (BC,), (0,))
 
-        b_g0 = tl.load(p_g0, boundary_check=(0,)).to(tl.float32)
-        b_g1 = tl.load(p_g1, boundary_check=(0,)).to(tl.float32)
-        b_g2 = tl.load(p_g2, boundary_check=(0,)).to(tl.float32)
-        b_g3 = tl.load(p_g3, boundary_check=(0,)).to(tl.float32)
+        b_g0 = tl.load(g + bos * HV + i_h + (i_tc0 + tl.arange(0, BC)) * HV, mask=(i_tc0 + tl.arange(0, BC)) < T, other=0).to(tl.float32)
+        b_g1 = tl.load(g + bos * HV + i_h + (i_tc1 + tl.arange(0, BC)) * HV, mask=(i_tc1 + tl.arange(0, BC)) < T, other=0).to(tl.float32)
+        b_g2 = tl.load(g + bos * HV + i_h + (i_tc2 + tl.arange(0, BC)) * HV, mask=(i_tc2 + tl.arange(0, BC)) < T, other=0).to(tl.float32)
+        b_g3 = tl.load(g + bos * HV + i_h + (i_tc3 + tl.arange(0, BC)) * HV, mask=(i_tc3 + tl.arange(0, BC)) < T, other=0).to(tl.float32)
 
     ############################################################################
     # Step 1: compute all 10 lower-triangular [BC, BC] blocks of K @ K^T
@@ -135,22 +128,22 @@ def chunk_gated_delta_rule_fwd_kkt_solve_kernel(
     b_A32 = tl.zeros([BC, BC], dtype=tl.float32)
 
     for i_k in range(tl.cdiv(K, BK)):
-        p_k0 = tl.make_block_ptr(k, (T, K), (H*K, 1), (i_tc0, i_k * BK), (BC, BK), (1, 0))
-        b_k0 = tl.load(p_k0, boundary_check=(0, 1))
+        desc_k0 = make_tensor_descriptor(k, [T, K], [H*K, 1], [BC, BK])
+        b_k0 = desc_k0.load([i_tc0, i_k * BK])
         # diagonal block 0
         b_A00 += tl.dot(b_k0, tl.trans(b_k0))
 
         if i_tc1 < T:
-            p_k1 = tl.make_block_ptr(k, (T, K), (H*K, 1), (i_tc1, i_k * BK), (BC, BK), (1, 0))
-            b_k1 = tl.load(p_k1, boundary_check=(0, 1))
+            desc_k1 = make_tensor_descriptor(k, [T, K], [H*K, 1], [BC, BK])
+            b_k1 = desc_k1.load([i_tc1, i_k * BK])
             # diagonal block 1
             b_A11 += tl.dot(b_k1, tl.trans(b_k1))
             # off-diagonal (1,0)
             b_A10 += tl.dot(b_k1, tl.trans(b_k0))
 
             if i_tc2 < T:
-                p_k2 = tl.make_block_ptr(k, (T, K), (H*K, 1), (i_tc2, i_k * BK), (BC, BK), (1, 0))
-                b_k2 = tl.load(p_k2, boundary_check=(0, 1))
+                desc_k2 = make_tensor_descriptor(k, [T, K], [H*K, 1], [BC, BK])
+                b_k2 = desc_k2.load([i_tc2, i_k * BK])
                 # diagonal block 2
                 b_A22 += tl.dot(b_k2, tl.trans(b_k2))
                 # off-diagonal (2,0), (2,1)
@@ -158,8 +151,8 @@ def chunk_gated_delta_rule_fwd_kkt_solve_kernel(
                 b_A21 += tl.dot(b_k2, tl.trans(b_k1))
 
                 if i_tc3 < T:
-                    p_k3 = tl.make_block_ptr(k, (T, K), (H*K, 1), (i_tc3, i_k * BK), (BC, BK), (1, 0))
-                    b_k3 = tl.load(p_k3, boundary_check=(0, 1))
+                    desc_k3 = make_tensor_descriptor(k, [T, K], [H*K, 1], [BC, BK])
+                    b_k3 = desc_k3.load([i_tc3, i_k * BK])
                     # diagonal block 3
                     b_A33 += tl.dot(b_k3, tl.trans(b_k3))
                     # off-diagonal (3,0), (3,1), (3,2)
@@ -293,27 +286,27 @@ def chunk_gated_delta_rule_fwd_kkt_solve_kernel(
     # Step 5: store full (I + A)^{-1} to output A
     ############################################################################
 
-    p_A00 = tl.make_block_ptr(A, (T, BT), (HV*BT, 1), (i_tc0, 0), (BC, BC), (1, 0))
-    p_A10 = tl.make_block_ptr(A, (T, BT), (HV*BT, 1), (i_tc1, 0), (BC, BC), (1, 0))
-    p_A11 = tl.make_block_ptr(A, (T, BT), (HV*BT, 1), (i_tc1, BC), (BC, BC), (1, 0))
-    p_A20 = tl.make_block_ptr(A, (T, BT), (HV*BT, 1), (i_tc2, 0), (BC, BC), (1, 0))
-    p_A21 = tl.make_block_ptr(A, (T, BT), (HV*BT, 1), (i_tc2, BC), (BC, BC), (1, 0))
-    p_A22 = tl.make_block_ptr(A, (T, BT), (HV*BT, 1), (i_tc2, 2*BC), (BC, BC), (1, 0))
-    p_A30 = tl.make_block_ptr(A, (T, BT), (HV*BT, 1), (i_tc3, 0), (BC, BC), (1, 0))
-    p_A31 = tl.make_block_ptr(A, (T, BT), (HV*BT, 1), (i_tc3, BC), (BC, BC), (1, 0))
-    p_A32 = tl.make_block_ptr(A, (T, BT), (HV*BT, 1), (i_tc3, 2*BC), (BC, BC), (1, 0))
-    p_A33 = tl.make_block_ptr(A, (T, BT), (HV*BT, 1), (i_tc3, 3*BC), (BC, BC), (1, 0))
+    desc_A00 = make_tensor_descriptor(A, [T, BT], [HV*BT, 1], [BC, BC])
+    desc_A10 = make_tensor_descriptor(A, [T, BT], [HV*BT, 1], [BC, BC])
+    desc_A11 = make_tensor_descriptor(A, [T, BT], [HV*BT, 1], [BC, BC])
+    desc_A20 = make_tensor_descriptor(A, [T, BT], [HV*BT, 1], [BC, BC])
+    desc_A21 = make_tensor_descriptor(A, [T, BT], [HV*BT, 1], [BC, BC])
+    desc_A22 = make_tensor_descriptor(A, [T, BT], [HV*BT, 1], [BC, BC])
+    desc_A30 = make_tensor_descriptor(A, [T, BT], [HV*BT, 1], [BC, BC])
+    desc_A31 = make_tensor_descriptor(A, [T, BT], [HV*BT, 1], [BC, BC])
+    desc_A32 = make_tensor_descriptor(A, [T, BT], [HV*BT, 1], [BC, BC])
+    desc_A33 = make_tensor_descriptor(A, [T, BT], [HV*BT, 1], [BC, BC])
 
-    tl.store(p_A00, b_Ai00.to(A.dtype.element_ty), boundary_check=(0, 1))
-    tl.store(p_A10, b_Ai10.to(A.dtype.element_ty), boundary_check=(0, 1))
-    tl.store(p_A11, b_Ai11.to(A.dtype.element_ty), boundary_check=(0, 1))
-    tl.store(p_A20, b_Ai20.to(A.dtype.element_ty), boundary_check=(0, 1))
-    tl.store(p_A21, b_Ai21.to(A.dtype.element_ty), boundary_check=(0, 1))
-    tl.store(p_A22, b_Ai22.to(A.dtype.element_ty), boundary_check=(0, 1))
-    tl.store(p_A30, b_Ai30.to(A.dtype.element_ty), boundary_check=(0, 1))
-    tl.store(p_A31, b_Ai31.to(A.dtype.element_ty), boundary_check=(0, 1))
-    tl.store(p_A32, b_Ai32.to(A.dtype.element_ty), boundary_check=(0, 1))
-    tl.store(p_A33, b_Ai33.to(A.dtype.element_ty), boundary_check=(0, 1))
+    desc_A00.store([i_tc0, 0], b_Ai00.to(A.dtype.element_ty))
+    desc_A10.store([i_tc1, 0], b_Ai10.to(A.dtype.element_ty))
+    desc_A11.store([i_tc1, BC], b_Ai11.to(A.dtype.element_ty))
+    desc_A20.store([i_tc2, 0], b_Ai20.to(A.dtype.element_ty))
+    desc_A21.store([i_tc2, BC], b_Ai21.to(A.dtype.element_ty))
+    desc_A22.store([i_tc2, 2*BC], b_Ai22.to(A.dtype.element_ty))
+    desc_A30.store([i_tc3, 0], b_Ai30.to(A.dtype.element_ty))
+    desc_A31.store([i_tc3, BC], b_Ai31.to(A.dtype.element_ty))
+    desc_A32.store([i_tc3, 2*BC], b_Ai32.to(A.dtype.element_ty))
+    desc_A33.store([i_tc3, 3*BC], b_Ai33.to(A.dtype.element_ty))
 
 
 @dispatch('gated_delta_rule')

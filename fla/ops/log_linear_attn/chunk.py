@@ -17,6 +17,7 @@ from einops import reduce
 
 from fla.ops.utils import chunk_local_cumsum
 from fla.ops.utils.op import exp
+from fla.ops.utils.op import make_tensor_descriptor
 from fla.utils import autocast_custom_bwd, autocast_custom_fwd, autotune_cache_kwargs, input_guard
 
 BLOCK_K = 64
@@ -67,8 +68,8 @@ def chunkwise_fwd_kernel(
     USE_INITIAL_STATE: tl.constexpr,
     STORE_FINAL_STATE: tl.constexpr,
 ):
-    p_llut = tl.make_block_ptr(llut, (BT, BT), (BT, 1), (0, 0), (BT, BT), (1, 0))
-    b_llut = tl.load(p_llut, boundary_check=(0, 1))
+    desc_llut = make_tensor_descriptor(llut, [BT, BT], [BT, 1], [BT, BT])
+    b_llut = desc_llut.load([0, 0])
     # parallel over sequences and heads
     i_k = tl.program_id(0)
     i_nh = tl.program_id(1)
@@ -252,7 +253,6 @@ def chunkwise_fwd_kernel(
         b_h_ptrs = level_scales + ((bos + i_t * BT + i_idx) * H + i_h) * L + b_llut
         b_h = tl.load(b_h_ptrs, mask=i_idx >= j_idx)
 
-        p_g = tl.make_block_ptr(g + bos * H + i_h, (T,), (H,), (i_t * BT,), (BT,), (0,))
         p_q = tl.make_block_ptr(
             q + bos * K, (T, K), (K, 1), (i_t * BT, i_k * BK), (BT, BK), (1, 0),
         )
@@ -276,7 +276,7 @@ def chunkwise_fwd_kernel(
             (1, 0),
         )
 
-        b_g = tl.load(p_g, boundary_check=(0,))
+        b_g = tl.load(g + bos * H + i_h + (i_t * BT + tl.arange(0, BT)) * H, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0)
         b_q = tl.load(p_q, boundary_check=(0, 1))
         b_k = tl.load(p_k, boundary_check=(0, 1))
 
@@ -754,7 +754,7 @@ def copy_input_kernel(
             (1, 0),
         )
 
-        b_g = tl.load(p_g, boundary_check=(0,))
+        b_g = tl.load(g + bos * H + i_h + (i_t * BT + tl.arange(0, BT)) * H, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0)
         b_q = tl.load(p_q, boundary_check=(0, 1))
         b_k = tl.load(p_k, boundary_check=(0, 1))
         b_v = tl.load(p_v, boundary_check=(0, 1))
@@ -861,7 +861,6 @@ def copy_last_chunk_kernel(
 
     seq_offset = (T // BT) * BT
 
-    p_g = tl.make_block_ptr(g + bos * H + i_h, (T,), (H,), (seq_offset,), (BT,), (0,))
     p_q = tl.make_block_ptr(
         q + bos * K, (T, K), (K, 1), (seq_offset, 0), (BT, K), (1, 0),
     )
@@ -889,7 +888,7 @@ def copy_last_chunk_kernel(
         v_prev + (i_n * BT * H + i_h) * V, (BT, V), (H * V, 1), (0, 0), (BT, V), (1, 0),
     )
 
-    tl.store(p_g_prev, tl.load(p_g, boundary_check=(0,)), boundary_check=(0,))
+    tl.store(p_g_prev, tl.load(g + bos * H + i_h + (seq_offset + tl.arange(0, BT)) * H, mask=(seq_offset + tl.arange(0, BT)) < T, other=0), boundary_check=(0,))
     tl.store(p_q_prev, tl.load(p_q, boundary_check=(0, 1)), boundary_check=(0, 1))
     tl.store(p_k_prev, tl.load(p_k, boundary_check=(0, 1)), boundary_check=(0, 1))
     tl.store(p_v_prev, tl.load(p_v, boundary_check=(0, 1)), boundary_check=(0, 1))
@@ -1023,7 +1022,7 @@ def chunkwise_bwd_kernel_dhg(
                 (0,),
             )
             b_l = tl.load(p_l, boundary_check=(0,))
-            b_g = tl.load(p_g, boundary_check=(0,))
+            b_g = tl.load(g + bos * H + i_h + (seq_offset + tl.arange(0, BT)) * H, mask=(seq_offset + tl.arange(0, BT)) < T, other=0)
             b_q = tl.load(p_q, boundary_check=(0, 1))
             b_q = (b_q * (tl.exp(b_g) * b_l)[None, :]).to(b_q.dtype)
             b_do = tl.load(p_do, boundary_check=(0, 1))
@@ -1084,7 +1083,6 @@ def chunkwise_bwd_kernel_hdqgl(
     num_intra_levels = (tl.log2(float(BT))).to(tl.int32) + 1
 
     for i_t in range(tl.cdiv(T, BT)):
-        p_g = tl.make_block_ptr(g + bos * H + i_h, (T,), (H,), (i_t * BT,), (BT,), (0,))
         if i_t & (1 << ell):  # compute and store derivatives
             p_do = tl.make_block_ptr(
                 do + (bos * H + i_h) * V,
@@ -1135,7 +1133,7 @@ def chunkwise_bwd_kernel_hdqgl(
 
             b_do = tl.load(p_do, boundary_check=(0, 1))
             b_q = tl.load(p_q, boundary_check=(0, 1))
-            b_g = tl.load(p_g, boundary_check=(0,))
+            b_g = tl.load(g + bos * H + i_h + (i_t * BT + tl.arange(0, BT)) * H, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0)
             b_l = tl.load(p_l, boundary_check=(0,))
 
             b_dlq = tl.exp(b_g)[:, None] * tl.dot(b_do, b_h.to(b_do.dtype))
@@ -1173,7 +1171,7 @@ def chunkwise_bwd_kernel_hdqgl(
                 (V, BT),
                 (0, 1),
             )
-            b_g = tl.load(p_g, boundary_check=(0,))
+            b_g = tl.load(g + bos * H + i_h + (i_t * BT + tl.arange(0, BT)) * H, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0)
             b_k = tl.load(p_k, boundary_check=(0, 1))
             b_v = tl.load(p_v, boundary_check=(0, 1))
             b_k = (b_k * tl.exp(b_g_last - b_g)[:, None]).to(b_k.dtype)
@@ -1234,8 +1232,7 @@ def chunkwise_bwd_kernel_dkg(
         (V, K),
         (0, 1),
     )
-    p_g = tl.make_block_ptr(g + bos * H + i_h, (T,), (H,), (i_t * BT,), (BT,), (0,))
-    p_k = tl.make_block_ptr(k + bos * K, (T, K), (K, 1), (i_t * BT, 0), (BT, K), (1, 0))
+    desc_k = make_tensor_descriptor(k + bos * K, [T, K], [K, 1], [BT, K])
     p_v = tl.make_block_ptr(
         v + (bos * H + i_h) * V,
         (T, V),
@@ -1247,12 +1244,11 @@ def chunkwise_bwd_kernel_dkg(
     p_dk = tl.make_block_ptr(
         dk + (bos * H + i_h) * K, (T, K), (H * K, 1), (i_t * BT, 0), (BT, K), (1, 0),
     )
-    p_dg = tl.make_block_ptr(dg + bos * H + i_h, (T,), (H,), (i_t * BT,), (BT,), (0,))
 
     b_dh = tl.load(p_dh, boundary_check=(0, 1))
-    b_g = tl.load(p_g, boundary_check=(0,))
+    b_g = tl.load(g + bos * H + i_h + (i_t * BT + tl.arange(0, BT)) * H, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0)
     b_v = tl.load(p_v, boundary_check=(0, 1))
-    b_k = tl.load(p_k, boundary_check=(0, 1))
+    b_k = desc_k.load([i_t * BT, 0])
     last_idx = min((i_t + 1) * BT, T) - 1
     b_g_last = tl.load(g + bos * H + last_idx * H + i_h)
     p_dg_last = dg_last + i_n * NT * H + i_t * H + i_h
@@ -1260,13 +1256,13 @@ def chunkwise_bwd_kernel_dkg(
 
     b_dg_last *= tl.exp(b_g_last)
     b_dk = tl.where(m_t, exp(b_g_last - b_g), 0)[:, None] * tl.dot(b_v, b_dh).to(b_v.dtype)
-    b_dg = tl.load(p_dg, boundary_check=(0,))
+    b_dg = tl.load(dg + bos * H + i_h + (i_t * BT + tl.arange(0, BT)) * H, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0)
     b_dg -= tl.sum(b_k * b_dk, axis=1)
     b_dg_last += tl.sum(b_dk * b_k)
 
     b_dg = tl.where(o_i < BT - 1, b_dg, b_dg + b_dg_last)
 
-    tl.store(p_dg, b_dg, boundary_check=(0,))
+    tl.store(dg + bos * H + i_h + (i_t * BT + tl.arange(0, BT)) * H, b_dg, mask=(i_t * BT + tl.arange(0, BT)) < T)
     tl.store(p_dk, b_dk.to(p_dk.dtype.element_ty), boundary_check=(0, 1))
 
 
@@ -1320,8 +1316,7 @@ def chunkwise_bwd_kernel_dv(
         (K, V),
         (1, 0),
     )
-    p_g = tl.make_block_ptr(g + bos * H + i_h, (T,), (H,), (i_t * BT,), (BT,), (0,))
-    p_k = tl.make_block_ptr(k + bos * K, (T, K), (K, 1), (i_t * BT, 0), (BT, K), (1, 0))
+    desc_k = make_tensor_descriptor(k + bos * K, [T, K], [K, 1], [BT, K])
     p_dv = tl.make_block_ptr(
         dv + (bos * H + i_h) * V, (T, V), (H * V, 1), (i_t * BT, 0), (BT, V), (1, 0),
     )
@@ -1330,8 +1325,8 @@ def chunkwise_bwd_kernel_dv(
     b_g_last = tl.load(g + bos * H + last_idx * H + i_h)
 
     b_dh = tl.load(p_dh, boundary_check=(0, 1))
-    b_g = tl.load(p_g, boundary_check=(0,))
-    b_k = tl.load(p_k, boundary_check=(0, 1))
+    b_g = tl.load(g + bos * H + i_h + (i_t * BT + tl.arange(0, BT)) * H, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0)
+    b_k = desc_k.load([i_t * BT, 0])
     b_dv = tl.where(m_t, exp(-b_g + b_g_last), 0)[:, None] * tl.dot(b_k, b_dh).to(b_k.dtype)
     tl.store(p_dv, b_dv.to(p_dv.dtype.element_ty), boundary_check=(0, 1))
 
@@ -1371,8 +1366,8 @@ def chunkwise_bwd_kernel_diag(
     BT: tl.constexpr,
     IS_VARLEN: tl.constexpr,
 ):
-    p_llut = tl.make_block_ptr(llut, (BT, BT), (BT, 1), (0, 0), (BT, BT), (1, 0))
-    b_llut = tl.load(p_llut, boundary_check=(0, 1))
+    desc_llut = make_tensor_descriptor(llut, [BT, BT], [BT, 1], [BT, BT])
+    b_llut = desc_llut.load([0, 0])
     i_t, i_nh = tl.program_id(0), tl.program_id(1)
     i_n, i_h = i_nh // H, i_nh % H
 
@@ -1392,16 +1387,14 @@ def chunkwise_bwd_kernel_diag(
     b_h_ptrs = l + ((bos + i_t * BT + i_idx) * H + i_h) * L + b_llut
     b_h = tl.load(b_h_ptrs, mask=i_idx >= j_idx)
 
-    p_g = tl.make_block_ptr(g + bos * H + i_h, (T,), (H,), (i_t * BT,), (BT,), (0,))
-    p_q = tl.make_block_ptr(q + bos * K, (K, T), (1, K), (0, i_t * BT), (K, BT), (0, 1))
-    p_k = tl.make_block_ptr(k + bos * K, (T, K), (K, 1), (i_t * BT, 0), (BT, K), (1, 0))
+    desc_q = make_tensor_descriptor(q + bos * K, [T, K], [K, 1], [BT, K])
+    desc_k = make_tensor_descriptor(k + bos * K, [T, K], [K, 1], [BT, K])
     p_v = tl.make_block_ptr(
         v + (bos * H + i_h) * V, (V, T), (1, H * V), (0, i_t * BT), (V, BT), (0, 1),
     )
     p_do = tl.make_block_ptr(
         do + (bos * H + i_h) * V, (T, V), (H * V, 1), (i_t * BT, 0), (BT, V), (1, 0),
     )
-    p_dg = tl.make_block_ptr(dg + bos * H + i_h, (T,), (H,), (i_t * BT,), (BT,), (0,))
     p_dq = tl.make_block_ptr(
         dq + (bos * H + i_h) * K, (T, K), (H * K, 1), (i_t * BT, 0), (BT, K), (1, 0),
     )
@@ -1412,15 +1405,15 @@ def chunkwise_bwd_kernel_diag(
         dv + (bos * H + i_h) * V, (T, V), (H * V, 1), (i_t * BT, 0), (BT, V), (1, 0),
     )
 
-    b_g = tl.load(p_g, boundary_check=(0,))
-    b_q = tl.load(p_q, boundary_check=(0, 1))
-    b_k = tl.load(p_k, boundary_check=(0, 1))
+    b_g = tl.load(g + bos * H + i_h + (i_t * BT + tl.arange(0, BT)) * H, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0)
+    b_q = tl.trans(desc_q.load([i_t * BT, 0]))
+    b_k = desc_k.load([i_t * BT, 0])
     b_v = tl.load(p_v, boundary_check=(0, 1))
     b_do = tl.load(p_do, boundary_check=(0, 1))
     b_dq = tl.load(p_dq, boundary_check=(0, 1))
     b_dk = tl.load(p_dk, boundary_check=(0, 1))
     b_dv = tl.load(p_dv, boundary_check=(0, 1))
-    b_dg = tl.load(p_dg, boundary_check=(0,))
+    b_dg = tl.load(dg + bos * H + i_h + (i_t * BT + tl.arange(0, BT)) * H, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0)
 
     b_s = (tl.dot(b_k, b_q)).to(b_q.dtype)
     # Apply causal and padding masks
@@ -1438,16 +1431,15 @@ def chunkwise_bwd_kernel_diag(
     tl.store(p_dv, b_dv.to(p_dv.dtype.element_ty), boundary_check=(0, 1))
     tl.store(p_dq, b_dq.to(p_dq.dtype.element_ty), boundary_check=(0, 1))
     tl.store(p_dk, b_dk.to(p_dk.dtype.element_ty), boundary_check=(0, 1))
-    tl.store(p_dg, b_dg.to(p_dg.dtype.element_ty), boundary_check=(0,))
+    tl.store(dg + bos * H + i_h + (i_t * BT + tl.arange(0, BT)) * H, b_dg.to((dg + bos * H + i_h).dtype.element_ty), mask=(i_t * BT + tl.arange(0, BT)) < T)
 
     num_intra_levels = (tl.log2(float(BT))).to(tl.int32) + 1
 
     for i in range(num_intra_levels):
-        p_mask = tl.make_block_ptr(mask + i * (BT * BT), (BT, BT), (BT, 1), (0, 0), (BT, BT), (1, 0))
-        b_mask = tl.load(p_mask, boundary_check=(0, 1))
+        desc_mask = make_tensor_descriptor(mask + i * (BT * BT), [BT, BT], [BT, 1], [BT, BT])
+        b_mask = desc_mask.load([0, 0])
         dl_i = tl.sum(tl.where(b_mask == 1, b_dl, 0), axis=1)
-        p_dl_i = tl.make_block_ptr(dl + (bos * H + i_h) * L + i, (T,), (H * L,), (i_t * BT,), (BT,), (0,))
-        tl.store(p_dl_i, dl_i, boundary_check=(0,))
+        tl.store(dl + (bos * H + i_h) * L + i + (i_t * BT + tl.arange(0, BT)) * H * L, dl_i, mask=(i_t * BT + tl.arange(0, BT)) < T)
 
 
 def construct_binary_level_mask(level, T):

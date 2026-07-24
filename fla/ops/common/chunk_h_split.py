@@ -10,6 +10,7 @@ import triton
 import triton.language as tl
 
 from fla.ops.utils.op import exp
+from fla.ops.utils.op import make_tensor_descriptor
 from fla.utils import autotune_cache_kwargs
 
 
@@ -79,17 +80,17 @@ def chunk_fwd_kernel_h_split(
     # for the first split, we directly store the state as the final result
     if i_s == 0:
         if USE_INITIAL_STATE:
-            p_h0 = tl.make_block_ptr(h0 + i_nh * K*V, (K, V), (V, 1), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
-            b_h += tl.load(p_h0, boundary_check=(0, 1)).to(tl.float32)
-        p_hr = tl.make_block_ptr(hr + i_sh * K*V, (K, V), (V, 1), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
-        tl.store(p_hr, b_h.to(p_hr.dtype.element_ty), boundary_check=(0, 1))
+            desc_h0 = make_tensor_descriptor(h0 + i_nh * K*V, [K, V], [V, 1], [BK, BV])
+            b_h += desc_h0.load([i_k * BK, i_v * BV]).to(tl.float32)
+        desc_hr = make_tensor_descriptor(hr + i_sh * K*V, [K, V], [V, 1], [BK, BV])
+        desc_hr.store([i_k * BK, i_v * BV], b_h.to(desc_hr.dtype))
     for i_t in range(tl.cdiv(i_s * S, BT), tl.cdiv(min(i_s * S + S, T), BT)):
-        p_k = tl.make_block_ptr(k + (bos*H + i_h) * K, (K, T), (1, H*K), (i_k * BK, i_t * BT), (BK, BT), (0, 1))
-        p_v = tl.make_block_ptr(v + (bos*H + i_h) * V, (T, V), (H*V, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
+        desc_k = make_tensor_descriptor(k + (bos*H + i_h) * K, [T, K], [H*K, 1], [BT, BK])
+        desc_v = make_tensor_descriptor(v + (bos*H + i_h) * V, [T, V], [H*V, 1], [BT, BV])
         # [BK, BT]
-        b_k = tl.load(p_k, boundary_check=(0, 1))
+        b_k = tl.trans(desc_k.load([i_t * BT, i_k * BK]))
         # [BT, BV]
-        b_v = tl.load(p_v, boundary_check=(0, 1))
+        b_v = desc_v.load([i_t * BT, i_v * BV])
         last_idx = min(i_t * BT + BT, T) - 1
 
         # scalar decay
@@ -102,24 +103,24 @@ def chunk_fwd_kernel_h_split(
 
         # vector decay, h = Diag(gk) @ h
         if USE_GK:
-            p_gk = tl.make_block_ptr(gk + (bos*H + i_h) * K, (K, T), (1, H*K), (i_k * BK, i_t * BT), (BK, BT), (0, 1))
+            desc_gk = make_tensor_descriptor(gk + (bos*H + i_h) * K, [T, K], [H*K, 1], [BT, BK])
             p_gk_last = gk + (bos + last_idx) * H*K + i_h * K + i_k * BK + tl.arange(0, BK)
 
             b_gk_last = tl.load(p_gk_last, mask=(i_k * BK + tl.arange(0, BK) < K), other=0.)
             b_h *= exp(b_gk_last)[:, None]
 
-            b_gk = tl.load(p_gk, boundary_check=(0, 1))
+            b_gk = tl.trans(desc_gk.load([i_t * BT, i_k * BK]))
             b_k = (b_k * exp(b_gk_last[:, None] - b_gk)).to(b_k.dtype)
 
         # vector decay, h = h @ Diag(gv)
         if USE_GV:
-            p_gv = tl.make_block_ptr(gv + (bos*H + i_h) * V, (T, V), (H*V, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
+            desc_gv = make_tensor_descriptor(gv + (bos*H + i_h) * V, [T, V], [H*V, 1], [BT, BV])
             p_gv_last = gv + (bos + last_idx) * H*V + i_h * V + i_v * BV + tl.arange(0, BV)
 
             b_gv_last = tl.load(p_gv_last, mask=(i_v * BV + tl.arange(0, BV) < V), other=0.)
             b_h *= exp(b_gv_last)[None, :]
 
-            b_gv = tl.load(p_gv, boundary_check=(0, 1))
+            b_gv = desc_gv.load([i_t * BT, i_v * BV])
             b_v = (b_v * exp(b_gv_last[None, :] - b_gv)).to(b_v.dtype)
 
         b_h += tl.dot(b_k, b_v)
@@ -127,11 +128,11 @@ def chunk_fwd_kernel_h_split(
     # if there are more than one splits, we store the result to (unreduced) hs
     # otherwise, we store the result to ht as the final state
     if NS > 1:
-        p_hs = tl.make_block_ptr(hs + i_sh * K*V, (K, V), (V, 1), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
-        tl.store(p_hs, b_h.to(p_hs.dtype.element_ty), boundary_check=(0, 1))
+        desc_hs = make_tensor_descriptor(hs + i_sh * K*V, [K, V], [V, 1], [BK, BV])
+        desc_hs.store([i_k * BK, i_v * BV], b_h.to(desc_hs.dtype))
     elif STORE_FINAL_STATE:
-        p_ht = tl.make_block_ptr(ht + i_nh * K*V, (K, V), (V, 1), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
-        tl.store(p_ht, b_h.to(p_ht.dtype.element_ty), boundary_check=(0, 1))
+        desc_ht = make_tensor_descriptor(ht + i_nh * K*V, [K, V], [V, 1], [BK, BV])
+        desc_ht.store([i_k * BK, i_v * BV], b_h.to(desc_ht.dtype))
 
 
 @triton.heuristics({
@@ -188,10 +189,10 @@ def chunk_fwd_kernel_h_reduction(
     b_h = tl.zeros([BK, BV], dtype=tl.float32)
     # skip the first split
     for i_s in range(1, NS):
-        p_hs = tl.make_block_ptr(hs + ((boh + i_s-1) * H + i_h) * K*V, (K, V), (V, 1), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
-        p_hr = tl.make_block_ptr(hr + ((boh + i_s) * H + i_h) * K*V, (K, V), (V, 1), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
-        b_h += tl.load(p_hs, boundary_check=(0, 1)).to(tl.float32)
-        tl.store(p_hr, b_h.to(p_hr.dtype.element_ty), boundary_check=(0, 1))
+        desc_hs = make_tensor_descriptor(hs + ((boh + i_s-1) * H + i_h) * K*V, [K, V], [V, 1], [BK, BV])
+        desc_hr = make_tensor_descriptor(hr + ((boh + i_s) * H + i_h) * K*V, [K, V], [V, 1], [BK, BV])
+        b_h += desc_hs.load([i_k * BK, i_v * BV]).to(tl.float32)
+        desc_hr.store([i_k * BK, i_v * BV], b_h.to(desc_hr.dtype))
 
         for i_t in range(tl.cdiv(i_s * S, BT), tl.cdiv(min(i_s * S + S, T), BT)):
             last_idx = min(i_t * BT + BT, T) - 1
@@ -214,10 +215,10 @@ def chunk_fwd_kernel_h_reduction(
 
     if NS > 1:
         if STORE_FINAL_STATE:
-            p_hs = tl.make_block_ptr(hs + ((boh + NS-1) * H + i_h)*K*V, (K, V), (V, 1), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
-            p_ht = tl.make_block_ptr(ht + i_nh * K*V, (K, V), (V, 1), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
-            b_h += tl.load(p_hs, boundary_check=(0, 1)).to(tl.float32)
-            tl.store(p_ht, b_h.to(p_ht.dtype.element_ty), boundary_check=(0, 1))
+            desc_hs = make_tensor_descriptor(hs + ((boh + NS-1) * H + i_h)*K*V, [K, V], [V, 1], [BK, BV])
+            desc_ht = make_tensor_descriptor(ht + i_nh * K*V, [K, V], [V, 1], [BK, BV])
+            b_h += desc_hs.load([i_k * BK, i_v * BV]).to(tl.float32)
+            desc_ht.store([i_k * BK, i_v * BV], b_h.to(desc_ht.dtype))
 
 
 @triton.heuristics({
@@ -289,19 +290,19 @@ def chunk_bwd_kernel_dh_split(
     b_dh = tl.zeros([BK, BV], dtype=tl.float32)
     if i_s == NS - 1:
         if USE_FINAL_STATE_GRADIENT:
-            p_dht = tl.make_block_ptr(dht + i_nh * K*V, (K, V), (V, 1), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
-            b_dh += tl.load(p_dht, boundary_check=(0, 1)).to(tl.float32)
-        p_dhr = tl.make_block_ptr(dhr + i_sh * K*V, (K, V), (V, 1), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
-        tl.store(p_dhr, b_dh.to(p_dhr.dtype.element_ty), boundary_check=(0, 1))
+            desc_dht = make_tensor_descriptor(dht + i_nh * K*V, [K, V], [V, 1], [BK, BV])
+            b_dh += desc_dht.load([i_k * BK, i_v * BV]).to(tl.float32)
+        desc_dhr = make_tensor_descriptor(dhr + i_sh * K*V, [K, V], [V, 1], [BK, BV])
+        desc_dhr.store([i_k * BK, i_v * BV], b_dh.to(desc_dhr.dtype))
 
     for i_t in range(tl.cdiv(min(i_s * S + S, T), BT) - 1, tl.cdiv(i_s * S, BT) - 1, -1):
-        p_q = tl.make_block_ptr(q + (bos*HQ + i_hq) * K, (K, T), (1, HQ*K), (i_k * BK, i_t * BT), (BK, BT), (0, 1))
-        p_do = tl.make_block_ptr(do + (bos*HQ + i_hq) * V, (T, V), (HQ*V, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
+        desc_q = make_tensor_descriptor(q + (bos*HQ + i_hq) * K, [T, K], [HQ*K, 1], [BT, BK])
+        desc_do = make_tensor_descriptor(do + (bos*HQ + i_hq) * V, [T, V], [HQ*V, 1], [BT, BV])
 
-        b_q = tl.load(p_q, boundary_check=(0, 1))
+        b_q = tl.trans(desc_q.load([i_t * BT, i_k * BK]))
         b_q = (b_q * scale).to(b_q.dtype)
         # [BT, BV]
-        b_do = tl.load(p_do, boundary_check=(0, 1))
+        b_do = desc_do.load([i_t * BT, i_v * BV])
 
         last_idx = min(i_t * BT + BT, T) - 1
         if USE_G:
@@ -312,19 +313,19 @@ def chunk_bwd_kernel_dh_split(
             b_dh *= exp(b_g_last)
 
         if USE_GK:
-            p_gk = tl.make_block_ptr(gk + (bos*H + i_h) * K, (K, T), (1, H*K), (i_k * BK, i_t * BT), (BK, BT), (0, 1))
+            desc_gk = make_tensor_descriptor(gk + (bos*H + i_h) * K, [T, K], [H*K, 1], [BT, BK])
             p_gk_last = gk + (bos + last_idx) * H*K + i_h * K + i_k * BK + tl.arange(0, BK)
 
-            b_gk = tl.load(p_gk, boundary_check=(0, 1))
+            b_gk = tl.trans(desc_gk.load([i_t * BT, i_k * BK]))
             b_q = (b_q * exp(b_gk)).to(b_q.dtype)
             b_gk_last = tl.load(p_gk_last, mask=(i_k * BK + tl.arange(0, BK) < K), other=0.)
             b_dh *= exp(b_gk_last)[:, None]
 
         if USE_GV:
-            p_gv = tl.make_block_ptr(gv + (bos*H + i_h) * V, (T, V), (H*V, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
+            desc_gv = make_tensor_descriptor(gv + (bos*H + i_h) * V, [T, V], [H*V, 1], [BT, BV])
             p_gv_last = gv + (bos + last_idx) * H*V + i_h * V + i_v * BV + tl.arange(0, BV)
 
-            b_gv = tl.load(p_gv, boundary_check=(0, 1))
+            b_gv = desc_gv.load([i_t * BT, i_v * BV])
             b_do = (b_do * exp(b_gv)).to(b_do.dtype)
 
             b_gv_last = tl.load(p_gv_last, mask=(i_v * BV + tl.arange(0, BV) < V), other=0.)
@@ -333,11 +334,11 @@ def chunk_bwd_kernel_dh_split(
         b_dh += tl.dot(b_q, b_do)
 
     if NS > 1:
-        p_dhs = tl.make_block_ptr(dhs + i_sh * K*V, (K, V), (V, 1), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
-        tl.store(p_dhs, b_dh.to(p_dhs.dtype.element_ty), boundary_check=(0, 1))
+        desc_dhs = make_tensor_descriptor(dhs + i_sh * K*V, [K, V], [V, 1], [BK, BV])
+        desc_dhs.store([i_k * BK, i_v * BV], b_dh.to(desc_dhs.dtype))
     elif STORE_INITIAL_STATE_GRADIENT:
-        p_dh0 = tl.make_block_ptr(dh0 + i_nh * K*V, (K, V), (V, 1), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
-        tl.store(p_dh0, b_dh.to(p_dh0.dtype.element_ty), boundary_check=(0, 1))
+        desc_dh0 = make_tensor_descriptor(dh0 + i_nh * K*V, [K, V], [V, 1], [BK, BV])
+        desc_dh0.store([i_k * BK, i_v * BV], b_dh.to(desc_dh0.dtype))
 
 
 @triton.heuristics({
@@ -396,10 +397,10 @@ def chunk_bwd_kernel_dh_reduction(
 
     b_dh = tl.zeros([BK, BV], dtype=tl.float32)
     for i_s in range(NS - 2, -1, -1):
-        p_dhs = tl.make_block_ptr(dhs + ((boh+i_s+1) * H + i_h) * K*V, (K, V), (V, 1), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
-        p_dhr = tl.make_block_ptr(dhr + ((boh+i_s) * H + i_h) * K*V, (K, V), (V, 1), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
-        b_dh += tl.load(p_dhs, boundary_check=(0, 1)).to(tl.float32)
-        tl.store(p_dhr, b_dh.to(p_dhr.dtype.element_ty), boundary_check=(0, 1))
+        desc_dhs = make_tensor_descriptor(dhs + ((boh+i_s+1) * H + i_h) * K*V, [K, V], [V, 1], [BK, BV])
+        desc_dhr = make_tensor_descriptor(dhr + ((boh+i_s) * H + i_h) * K*V, [K, V], [V, 1], [BK, BV])
+        b_dh += desc_dhs.load([i_k * BK, i_v * BV]).to(tl.float32)
+        desc_dhr.store([i_k * BK, i_v * BV], b_dh.to(desc_dhr.dtype))
 
         for i_t in range(tl.cdiv(min(i_s * S + S, T), BT) - 1, tl.cdiv(i_s * S, BT) - 1, -1):
             last_idx = min(i_t * BT + BT, T) - 1
@@ -420,10 +421,10 @@ def chunk_bwd_kernel_dh_reduction(
 
     if NS > 1:
         if STORE_INITIAL_STATE_GRADIENT:
-            p_dhs = tl.make_block_ptr(dhs + (boh * H + i_h)*K*V, (K, V), (V, 1), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
-            p_dh0 = tl.make_block_ptr(dh0 + i_nh * K*V, (K, V), (V, 1), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
-            b_dh += tl.load(p_dhs, boundary_check=(0, 1)).to(tl.float32)
-            tl.store(p_dh0, b_dh.to(p_dh0.dtype.element_ty), boundary_check=(0, 1))
+            desc_dhs = make_tensor_descriptor(dhs + (boh * H + i_h)*K*V, [K, V], [V, 1], [BK, BV])
+            desc_dh0 = make_tensor_descriptor(dh0 + i_nh * K*V, [K, V], [V, 1], [BK, BV])
+            b_dh += desc_dhs.load([i_k * BK, i_v * BV]).to(tl.float32)
+            desc_dh0.store([i_k * BK, i_v * BV], b_dh.to(desc_dh0.dtype))
 
 
 def chunk_fwd_h(

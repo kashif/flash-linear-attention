@@ -23,6 +23,7 @@ import triton.language as tl
 
 from fla.ops.utils.cache import fla_cache_autotune
 from fla.ops.utils.op import exp2
+from fla.ops.utils.op import make_tensor_descriptor
 from fla.utils import autotune_cache_kwargs
 
 
@@ -98,24 +99,24 @@ def chunk_gdn2_fwd_kernel_intra_token_parallel(
     m_h = (i_hg * BH + o_h) < H
     m_k = o_k < K
 
-    p_q = tl.make_block_ptr(q + i_t * H * K, (H, K), (K, 1), (i_hg * BH, 0), (BH, BK), (1, 0))
-    p_k = tl.make_block_ptr(k + i_t * H * K, (H, K), (K, 1), (i_hg * BH, 0), (BH, BK), (1, 0))
-    p_g = tl.make_block_ptr(g + i_t * H * K, (H, K), (K, 1), (i_hg * BH, 0), (BH, BK), (1, 0))
-    p_b = tl.make_block_ptr(b + i_t * H * K, (H, K), (K, 1), (i_hg * BH, 0), (BH, BK), (1, 0))
+    desc_q = make_tensor_descriptor(q + i_t * H * K, [H, K], [K, 1], [BH, BK])
+    desc_k = make_tensor_descriptor(k + i_t * H * K, [H, K], [K, 1], [BH, BK])
+    desc_g = make_tensor_descriptor(g + i_t * H * K, [H, K], [K, 1], [BH, BK])
+    desc_b = make_tensor_descriptor(b + i_t * H * K, [H, K], [K, 1], [BH, BK])
 
-    b_q = tl.load(p_q, boundary_check=(0, 1)).to(tl.float32)
-    b_k = tl.load(p_k, boundary_check=(0, 1)).to(tl.float32)
-    b_g = tl.load(p_g, boundary_check=(0, 1)).to(tl.float32)
-    b_b = tl.load(p_b, boundary_check=(0, 1)).to(tl.float32)
+    b_q = desc_q.load([i_hg * BH, 0]).to(tl.float32)
+    b_k = desc_k.load([i_hg * BH, 0]).to(tl.float32)
+    b_g = desc_g.load([i_hg * BH, 0]).to(tl.float32)
+    b_b = desc_b.load([i_hg * BH, 0]).to(tl.float32)
 
     # Fold channel-wise erase gate into the key tile.
     b_k = b_k * b_b
 
     for j in range(i_ts, min(i_t + 1, min(T, i_ts + BC))):
-        p_kj = tl.make_block_ptr(k + j * H * K, (H, K), (K, 1), (i_hg * BH, 0), (BH, BK), (1, 0))
-        p_gj = tl.make_block_ptr(g + j * H * K, (H, K), (K, 1), (i_hg * BH, 0), (BH, BK), (1, 0))
-        b_kj = tl.load(p_kj, boundary_check=(0, 1)).to(tl.float32)
-        b_gj = tl.load(p_gj, boundary_check=(0, 1)).to(tl.float32)
+        desc_kj = make_tensor_descriptor(k + j * H * K, [H, K], [K, 1], [BH, BK])
+        desc_gj = make_tensor_descriptor(g + j * H * K, [H, K], [K, 1], [BH, BK])
+        b_kj = desc_kj.load([i_hg * BH, 0]).to(tl.float32)
+        b_gj = desc_gj.load([i_hg * BH, 0]).to(tl.float32)
 
         b_kgj = b_kj * exp2(b_g - b_gj)
         b_kgj = tl.where(m_k[None, :], b_kgj, 0.0)

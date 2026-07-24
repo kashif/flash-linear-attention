@@ -11,6 +11,7 @@ import triton.language as tl
 
 from fla.ops.utils import prepare_chunk_indices, prepare_chunk_offsets
 from fla.ops.utils.op import exp2
+from fla.ops.utils.op import make_tensor_descriptor
 from fla.utils import check_shared_mem
 
 
@@ -83,17 +84,14 @@ def parallel_path_bwd_dq_kernel(
     sm_scale = scale * 1.44269504
 
     # load query
-    p_do = tl.make_block_ptr(do, (T, V), (HQ*V, 1), (i_t * BT, 0), (BT, BV), (1, 0))
-    b_do = tl.load(p_do, boundary_check=(0, 1))
+    desc_do = make_tensor_descriptor(do, [T, V], [HQ*V, 1], [BT, BV])
+    b_do = desc_do.load([i_t * BT, 0])
 
-    p_l = tl.make_block_ptr(L, (T,), (HQ,), (i_t * BT,), (BT,), (0,))
-    p_d = tl.make_block_ptr(D, (T,), (HQ,), (i_t * BT,), (BT,), (0,))
-    b_l = tl.load(p_l, boundary_check=(0,))
-    b_delta = tl.load(p_d, boundary_check=(0,))
+    b_l = tl.load(L + (i_t * BT + tl.arange(0, BT)) * HQ, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0)
+    b_delta = tl.load(D + (i_t * BT + tl.arange(0, BT)) * HQ, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0)
 
     if USE_GATE:
-        p_g_cumsum_q = tl.make_block_ptr(g_cumsum, (T,), (HQ,), (i_t * BT,), (BT,), (0,))
-        b_g_cumsum_q = tl.load(p_g_cumsum_q, boundary_check=(0,)).to(tl.float32)
+        b_g_cumsum_q = tl.load(g_cumsum + (i_t * BT + tl.arange(0, BT)) * HQ, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0).to(tl.float32)
         b_dg_cumsum_q = tl.zeros([BT], dtype=tl.float32)
     else:
         b_g_cumsum_q = None
@@ -104,37 +102,35 @@ def parallel_path_bwd_dq_kernel(
 
     for offset_outer in range(0, curr_end, S):
         idx_j = offset_outer // S
-        p_q = tl.make_block_ptr(q + ((bos.to(tl.int64) * NUM_BLOCKS + idx_j + 1) * HQ + i_hq) * K, (T, K),
-                                (HQ*K*NUM_BLOCKS, 1), (i_t * BT, 0), (BT, BK), (1, 0))
-        b_q = tl.load(p_q, boundary_check=(0, 1))
+        desc_q = make_tensor_descriptor(q + ((bos.to(tl.int64) * NUM_BLOCKS + idx_j + 1) * HQ + i_hq) * K, [T, K], [HQ*K*NUM_BLOCKS, 1], [BT, BK])
+        b_q = desc_q.load([i_t * BT, 0])
 
         b_dh = -tl.dot(tl.trans(b_q), b_dq.to(b_q.dtype))
         tl.atomic_add(dhc_whole + idx_j * stride_hq + tl.arange(0, K)
                       [:, None] * K + tl.arange(0, K)[None, :], b_dh, sem='relaxed')
-        p_h = tl.make_block_ptr(hc_whole + idx_j * stride_h, (K, K), (K, 1), (0, 0), (BK, BK), (1, 0))
-        b_h = tl.load(p_h, boundary_check=(0, 1))
+        desc_h = make_tensor_descriptor(hc_whole + idx_j * stride_h, [K, K], [K, 1], [BK, BK])
+        b_h = desc_h.load([0, 0])
         b_dq = b_dq - tl.dot(b_dq.to(b_h.dtype), tl.trans(b_h))
 
         for offset in range(offset_outer, min(offset_outer+S, i_t*BT), BS):
-            p_k = tl.make_block_ptr(k, (T, K), (H * K, 1), (offset, 0), (BS, BK), (1, 0))
-            b_k = tl.load(p_k, boundary_check=(0, 1))
+            desc_k = make_tensor_descriptor(k, [T, K], [H * K, 1], [BS, BK])
+            b_k = desc_k.load([offset, 0])
             b_A = tl.dot(b_q, tl.trans(b_k).to(b_q.dtype))
             if USE_GATE:
-                p_g_cumsum_k = tl.make_block_ptr(g_cumsum, (T,), (HQ,), (offset,), (BS,), (0,))
-                b_g_cumsum_k = tl.load(p_g_cumsum_k, boundary_check=(0,)).to(tl.float32)
+                b_g_cumsum_k = tl.load(g_cumsum + (offset + tl.arange(0, BS)) * HQ, mask=(offset + tl.arange(0, BS)) < T, other=0).to(tl.float32)
                 b_A = b_A + b_g_cumsum_q[:, None] - b_g_cumsum_k[None, :]
             b_A = exp2(b_A * sm_scale - b_l[:, None])
             b_A = tl.where(m_t[:, None], b_A, 0)
-            p_v = tl.make_block_ptr(v, (T, V), (H*V, 1), (offset, 0), (BS, BV), (1, 0))
-            b_v = tl.load(p_v, boundary_check=(0, 1))
+            desc_v = make_tensor_descriptor(v, [T, V], [H*V, 1], [BS, BV])
+            b_v = desc_v.load([offset, 0])
             b_dp = tl.dot(b_do, tl.trans(b_v).to(b_do.dtype))
             b_dA = (b_dp - b_delta[:, None]) * b_A * scale
             b_dq += tl.dot(b_dA.to(b_k.dtype), b_k)
             if USE_GATE:
                 b_dg_cumsum_q += tl.sum(b_dA, axis=1)
 
-    p_dq = tl.make_block_ptr(dq, (T, K), (K * HQ, 1), (i_t * BT, 0), (BT, BK), (1, 0))
-    tl.store(p_dq, b_dq.to(dq.dtype.element_ty), boundary_check=(0, 1))
+    desc_dq = make_tensor_descriptor(dq, [T, K], [K * HQ, 1], [BT, BK])
+    desc_dq.store([i_t * BT, 0], b_dq.to(dq.dtype.element_ty))
     if USE_GATE:
         tl.atomic_add(dg_cumsum + o_t * HQ, b_dg_cumsum_q, mask=m_t, sem='relaxed')
 

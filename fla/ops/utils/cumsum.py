@@ -12,6 +12,7 @@ import triton.language as tl
 from fla.ops.backends import dispatch
 from fla.ops.utils.cache import fla_cache_autotune
 from fla.ops.utils.index import prepare_chunk_indices
+from fla.ops.utils.op import make_tensor_descriptor
 from fla.utils import autotune_cache_kwargs, check_shared_mem, input_guard
 
 BS_LIST = [32, 64] if check_shared_mem() else [16, 32]
@@ -55,20 +56,19 @@ def chunk_local_cumsum_scalar_kernel(
         bos, eos = i_b * T, i_b * T + T
 
     if HEAD_FIRST:
-        p_s = tl.make_block_ptr(s + bos*H + i_h*T, (T,), (1,), (i_t * BT,), (BT,), (0,))
-        p_o = tl.make_block_ptr(o + bos*H + i_h*T, (T,), (1,), (i_t * BT,), (BT,), (0,))
+        desc_s = make_tensor_descriptor(s + bos*H + i_h*T, [T], [1], [BT])
+        desc_o = make_tensor_descriptor(o + bos*H + i_h*T, [T], [1], [BT])
     else:
-        p_s = tl.make_block_ptr(s + bos*H + i_h, (T,), (H,), (i_t * BT,), (BT,), (0,))
-        p_o = tl.make_block_ptr(o + bos*H + i_h, (T,), (H,), (i_t * BT,), (BT,), (0,))
+        pass
     # [BT]
-    b_s = tl.load(p_s, boundary_check=(0,)).to(tl.float32)
+    b_s = tl.load(s + bos*H + i_h + (i_t * BT + tl.arange(0, BT)) * H, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0).to(tl.float32)
     b_o = tl.cumsum(b_s, axis=0)
     if REVERSE:
         b_z = tl.sum(b_s, axis=0)
         b_o = -b_o + b_z[None] + b_s
     if HAS_SCALE:
         b_o *= scale
-    tl.store(p_o, b_o.to(p_o.dtype.element_ty), boundary_check=(0,))
+    tl.store(o + bos*H + i_h + (i_t * BT + tl.arange(0, BT)) * H, b_o.to((o + bos*H + i_h).dtype.element_ty), mask=(i_t * BT + tl.arange(0, BT)) < T)
 
 
 @triton.heuristics({
@@ -112,20 +112,20 @@ def chunk_local_cumsum_vector_kernel(
         bos, eos = i_b * T, i_b * T + T
 
     if HEAD_FIRST:
-        p_s = tl.make_block_ptr(s + (bos * H + i_h*T)*S, (T, S), (S, 1), (i_t * BT, i_s * BS), (BT, BS), (1, 0))
-        p_o = tl.make_block_ptr(o + (bos * H + i_h*T)*S, (T, S), (S, 1), (i_t * BT, i_s * BS), (BT, BS), (1, 0))
+        desc_s = make_tensor_descriptor(s + (bos * H + i_h*T)*S, [T, S], [S, 1], [BT, BS])
+        desc_o = make_tensor_descriptor(o + (bos * H + i_h*T)*S, [T, S], [S, 1], [BT, BS])
     else:
-        p_s = tl.make_block_ptr(s + (bos * H + i_h) * S, (T, S), (H*S, 1), (i_t * BT, i_s * BS), (BT, BS), (1, 0))
-        p_o = tl.make_block_ptr(o + (bos * H + i_h) * S, (T, S), (H*S, 1), (i_t * BT, i_s * BS), (BT, BS), (1, 0))
+        desc_s = make_tensor_descriptor(s + (bos * H + i_h) * S, [T, S], [H*S, 1], [BT, BS])
+        desc_o = make_tensor_descriptor(o + (bos * H + i_h) * S, [T, S], [H*S, 1], [BT, BS])
     # [BT, BS]
-    b_s = tl.load(p_s, boundary_check=(0, 1)).to(tl.float32)
+    b_s = desc_s.load([i_t * BT, i_s * BS]).to(tl.float32)
     if REVERSE:
         b_o = tl.cumsum(b_s, axis=0, reverse=True)
     else:
         b_o = tl.cumsum(b_s, axis=0)
     if HAS_SCALE:
         b_o *= scale
-    tl.store(p_o, b_o.to(p_o.dtype.element_ty), boundary_check=(0, 1))
+    desc_o.store([i_t * BT, i_s * BS], b_o.to(desc_o.dtype))
 
 
 @triton.heuristics({
@@ -170,12 +170,11 @@ def chunk_global_cumsum_scalar_kernel(
     for i_c in range(NT):
         i_t = NT - 1 - i_c if REVERSE else i_c
         if HEAD_FIRST:
-            p_s = tl.make_block_ptr(s + bos*H + i_h*T, (T,), (1,), (i_t * BT,), (BT,), (0,))
-            p_o = tl.make_block_ptr(o + bos*H + i_h*T, (T,), (1,), (i_t * BT,), (BT,), (0,))
+            desc_s = make_tensor_descriptor(s + bos*H + i_h*T, [T], [1], [BT])
+            desc_o = make_tensor_descriptor(o + bos*H + i_h*T, [T], [1], [BT])
         else:
-            p_s = tl.make_block_ptr(s + bos*H + i_h, (T,), (H,), (i_t * BT,), (BT,), (0,))
-            p_o = tl.make_block_ptr(o + bos*H + i_h, (T,), (H,), (i_t * BT,), (BT,), (0,))
-        b_s = tl.load(p_s, boundary_check=(0,)).to(tl.float32)
+            pass
+        b_s = tl.load(s + bos*H + i_h + (i_t * BT + tl.arange(0, BT)) * H, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0).to(tl.float32)
         b_o = tl.cumsum(b_s, axis=0)
         b_ss = tl.sum(b_s, 0)
         if REVERSE:
@@ -185,7 +184,7 @@ def chunk_global_cumsum_scalar_kernel(
             b_z += b_ss
         if HAS_SCALE:
             b_o *= scale
-        tl.store(p_o, b_o.to(p_o.dtype.element_ty), boundary_check=(0,))
+        tl.store(o + bos*H + i_h + (i_t * BT + tl.arange(0, BT)) * H, b_o.to((o + bos*H + i_h).dtype.element_ty), mask=(i_t * BT + tl.arange(0, BT)) < T)
 
 
 @triton.heuristics({
@@ -232,20 +231,20 @@ def chunk_global_cumsum_vector_kernel(
     for i_c in range(NT):
         i_t = NT - 1 - i_c if REVERSE else i_c
         if HEAD_FIRST:
-            p_s = tl.make_block_ptr(s + (bos * H + i_h*T)*S, (T, S), (S, 1), (i_t * BT, i_s * BS), (BT, BS), (1, 0))
-            p_o = tl.make_block_ptr(o + (bos * H + i_h*T)*S, (T, S), (S, 1), (i_t * BT, i_s * BS), (BT, BS), (1, 0))
+            desc_s = make_tensor_descriptor(s + (bos * H + i_h*T)*S, [T, S], [S, 1], [BT, BS])
+            desc_o = make_tensor_descriptor(o + (bos * H + i_h*T)*S, [T, S], [S, 1], [BT, BS])
         else:
-            p_s = tl.make_block_ptr(s + (bos * H + i_h) * S, (T, S), (H*S, 1), (i_t * BT, i_s * BS), (BT, BS), (1, 0))
-            p_o = tl.make_block_ptr(o + (bos * H + i_h) * S, (T, S), (H*S, 1), (i_t * BT, i_s * BS), (BT, BS), (1, 0))
+            desc_s = make_tensor_descriptor(s + (bos * H + i_h) * S, [T, S], [H*S, 1], [BT, BS])
+            desc_o = make_tensor_descriptor(o + (bos * H + i_h) * S, [T, S], [H*S, 1], [BT, BS])
         # [BT, BS]
-        b_s = tl.load(p_s, boundary_check=(0, 1)).to(tl.float32)
+        b_s = desc_s.load([i_t * BT, i_s * BS]).to(tl.float32)
         if REVERSE:
             b_c = b_z[None, :] + tl.cumsum(b_s, axis=0, reverse=True)
         else:
             b_c = b_z[None, :] + tl.cumsum(b_s, axis=0)
         if HAS_SCALE:
             b_c *= scale
-        tl.store(p_o, b_c.to(p_o.dtype.element_ty), boundary_check=(0, 1))
+        desc_o.store([i_t * BT, i_s * BS], b_c.to(desc_o.dtype))
         b_z += tl.sum(b_s, 0)
 
 

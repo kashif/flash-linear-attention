@@ -10,6 +10,7 @@ import triton
 import triton.language as tl
 
 from fla.ops.utils import prepare_chunk_indices, prepare_chunk_offsets
+from fla.ops.utils.op import make_tensor_descriptor
 
 
 @triton.heuristics({
@@ -82,15 +83,14 @@ def parallel_path_bwd_dkv_kernel(
     sm_scale = scale * 1.44269504
 
     # load query
-    p_k = tl.make_block_ptr(k, (T, K), (H*K, 1), (i_t * BT, 0), (BT, BK), (1, 0))
-    b_k = tl.load(p_k, boundary_check=(0, 1))
-    p_v = tl.make_block_ptr(v, (T, V), (H*V, 1), (i_t * BT, 0), (BT, BV), (1, 0))
-    b_v = tl.load(p_v, boundary_check=(0, 1))
+    desc_k = make_tensor_descriptor(k, [T, K], [H*K, 1], [BT, BK])
+    b_k = desc_k.load([i_t * BT, 0])
+    desc_v = make_tensor_descriptor(v, [T, V], [H*V, 1], [BT, BV])
+    b_v = desc_v.load([i_t * BT, 0])
 
     if USE_GATE:
         b_g_cumsum_k = tl.zeros([BT], dtype=tl.float32)
-        p_g_cumsum_k = tl.make_block_ptr(g_cumsum, (T, ), (HQ, ), (i_t * BT, ), (BT, ), (0, ))
-        b_g_cumsum_k += tl.load(p_g_cumsum_k, boundary_check=(0, ))
+        b_g_cumsum_k += tl.load(g_cumsum + (i_t * BT + tl.arange(0, BT)) * HQ, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0)
         b_dg_cumsum_k = tl.zeros([BT], dtype=tl.float32)
     else:
         b_g_cumsum_k = None
@@ -105,23 +105,19 @@ def parallel_path_bwd_dkv_kernel(
     last_chunk_end = tl.ceil(T / BS).to(tl.int32) * BS - BS
 
     for offset in range(last_chunk_end, last_chunk_start+S-BS, -BS):
-        p_delta = tl.make_block_ptr(D, (T, ), (HQ, ), (offset, ), (BS, ), (0, ))
-        p_l = tl.make_block_ptr(L, (T, ), (HQ, ), (offset, ), (BS, ), (0, ))
-        b_delta = tl.load(p_delta, boundary_check=(0, ))
-        b_l = tl.load(p_l, boundary_check=(0, ))
+        b_delta = tl.load(D + (offset + tl.arange(0, BS)) * HQ, mask=(offset + tl.arange(0, BS)) < T, other=0)
+        b_l = tl.load(L + (offset + tl.arange(0, BS)) * HQ, mask=(offset + tl.arange(0, BS)) < T, other=0)
 
-        p_q = tl.make_block_ptr(q + ((bos.to(tl.int64) * NUM_BLOCKS + idx_j) * HQ + i_hq) * K, (T, K),
-                                (HQ*K*NUM_BLOCKS, 1), (offset, 0), (BS, BK), (1, 0))
-        b_q = tl.load(p_q, boundary_check=(0, 1))
+        desc_q = make_tensor_descriptor(q + ((bos.to(tl.int64) * NUM_BLOCKS + idx_j) * HQ + i_hq) * K, [T, K], [HQ*K*NUM_BLOCKS, 1], [BS, BK])
+        b_q = desc_q.load([offset, 0])
         b_A = tl.dot(b_k, tl.trans(b_q).to(b_k.dtype))
         if USE_GATE:
-            p_g_cumsum_q = tl.make_block_ptr(g_cumsum, (T, ), (HQ, ), (offset, ), (BS, ), (0, ))
-            b_g_cumsum_q = tl.load(p_g_cumsum_q, boundary_check=(0, ))
+            b_g_cumsum_q = tl.load(g_cumsum + (offset + tl.arange(0, BS)) * HQ, mask=(offset + tl.arange(0, BS)) < T, other=0)
             b_A = b_A + b_g_cumsum_q[None, :] - b_g_cumsum_k[:, None]
             b_A = tl.where((offset + tl.arange(0, BS) < T)[None, :], b_A, float("-inf"))  # avoid nan
         b_A_softmax = tl.math.exp2(b_A * sm_scale - b_l[None, :])
-        p_do = tl.make_block_ptr(do, (T, V), (HQ*V, 1), (offset, 0), (BS, BV), (1, 0))
-        b_do = tl.load(p_do, boundary_check=(0, 1))
+        desc_do = make_tensor_descriptor(do, [T, V], [HQ*V, 1], [BS, BV])
+        b_do = desc_do.load([offset, 0])
         b_dv += tl.dot(b_A_softmax.to(b_do.dtype), b_do)
         b_dp = tl.dot(b_v, tl.trans(b_do))
 
@@ -130,8 +126,8 @@ def parallel_path_bwd_dkv_kernel(
             b_dg_cumsum_k -= tl.sum(b_dA, axis=1)
         b_dk += tl.dot(b_dA.to(b_q.dtype), b_q)
 
-    p_dk = tl.make_block_ptr(dk, (T, K), (HQ*K, 1), (i_t * BT, 0), (BT, BK), (1, 0))
-    tl.store(p_dk, b_dk.to(dk.dtype.element_ty), boundary_check=(0, 1))
+    desc_dk = make_tensor_descriptor(dk, [T, K], [HQ*K, 1], [BT, BK])
+    desc_dk.store([i_t * BT, 0], b_dk.to(dk.dtype.element_ty))
     mask = i_t * BT + tl.arange(0, BT) < T
     tl.atomic_add(
         dv + (i_t * BT + tl.arange(0, BT))[:, None] * HQ * V + tl.arange(0, BV)[None, :],

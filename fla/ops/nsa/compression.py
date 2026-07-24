@@ -12,6 +12,7 @@ import triton.language as tl
 from fla.ops.attn.parallel import parallel_attn_bwd_preprocess
 from fla.ops.utils import prepare_chunk_indices, prepare_chunk_offsets, prepare_token_indices
 from fla.ops.utils.op import exp, log
+from fla.ops.utils.op import make_tensor_descriptor
 from fla.utils import autocast_custom_bwd, autocast_custom_fwd, autotune_cache_kwargs, check_shared_mem, contiguous
 
 
@@ -67,17 +68,17 @@ def parallel_nsa_compression_fwd_kernel(
         TC = tl.cdiv(TK, BS)
         boc = i_b * TC
 
-    p_q = tl.make_block_ptr(q + (bos_q + i_t) * HQ*K, (HQ, K), (K, 1), (i_h * G, 0), (G, BK), (1, 0))
+    desc_q = make_tensor_descriptor(q + (bos_q + i_t) * HQ*K, [HQ, K], [K, 1], [G, BK])
     Q_OFFSET = TK - TQ
     # the Q block is kept in the shared memory throughout the whole kernel
     # [G, BK]
-    b_q = tl.load(p_q, boundary_check=(0, 1))
+    b_q = desc_q.load([i_h * G, 0])
     b_q = (b_q * scale).to(b_q.dtype)
 
     # number of complete compression blocks visible to the query (q tokens are the last TQ of the sequence)
     NC = (i_t + Q_OFFSET + 1) // BS
 
-    p_o = tl.make_block_ptr(o + (bos_q + i_t) * HQ*V, (HQ, V), (V, 1), (i_h * G, i_v * BV), (G, BV), (1, 0))
+    desc_o = make_tensor_descriptor(o + (bos_q + i_t) * HQ*V, [HQ, V], [V, 1], [G, BV])
     # [G, BV]
     b_o = tl.zeros([G, BV], dtype=tl.float32)
     # max scores for the current block
@@ -88,12 +89,12 @@ def parallel_nsa_compression_fwd_kernel(
     for i_c in range(0, NC, BC):
         o_c = i_c + tl.arange(0, BC)
 
-        p_k = tl.make_block_ptr(k + (boc * H + i_h) * K, (K, TC), (1, H*K), (0, i_c), (BK, BC), (0, 1))
-        p_v = tl.make_block_ptr(v + (boc * H + i_h) * V, (TC, V), (H*V, 1), (i_c, i_v * BV), (BC, BV), (1, 0))
+        desc_k = make_tensor_descriptor(k + (boc * H + i_h) * K, [TC, K], [H*K, 1], [BC, BK])
+        desc_v = make_tensor_descriptor(v + (boc * H + i_h) * V, [TC, V], [H*V, 1], [BC, BV])
         # [BK, BC]
-        b_k = tl.load(p_k, boundary_check=(0, 1))
+        b_k = tl.trans(desc_k.load([i_c, 0]))
         # [BC, BV]
-        b_v = tl.load(p_v, boundary_check=(0, 1))
+        b_v = desc_v.load([i_c, i_v * BV])
         # [G, BC]
         b_s = tl.dot(b_q, b_k)
         # causal mask: only the NC complete blocks are visible
@@ -114,7 +115,7 @@ def parallel_nsa_compression_fwd_kernel(
         b_o = b_o / b_acc[:, None]
         b_lse = b_m + log(b_acc)
 
-    tl.store(p_o, b_o.to(p_o.dtype.element_ty), boundary_check=(0, 1))
+    desc_o.store([i_h * G, i_v * BV], b_o.to(desc_o.dtype))
     if i_v == 0:
         tl.store(lse + (bos_q + i_t) * HQ + i_h * G + tl.arange(0, G), b_lse.to(lse.dtype.element_ty))
 
@@ -175,14 +176,14 @@ def parallel_nsa_compression_bwd_kernel_dq(
     delta += (bos + i_t) * HQ
     dq += (i_v * all + bos + i_t) * HQ*K
 
-    p_q = tl.make_block_ptr(q, (HQ, K), (K, 1), (i_h * G, 0), (G, BK), (1, 0))
-    p_dq = tl.make_block_ptr(dq, (HQ, K), (K, 1), (i_h * G, 0), (G, BK), (1, 0))
+    desc_q = make_tensor_descriptor(q, [HQ, K], [K, 1], [G, BK])
+    desc_dq = make_tensor_descriptor(dq, [HQ, K], [K, 1], [G, BK])
 
     # [G, BK]
-    b_q = tl.load(p_q, boundary_check=(0, 1))
+    b_q = desc_q.load([i_h * G, 0])
     b_q = (b_q * scale).to(b_q.dtype)
 
-    p_do = tl.make_block_ptr(do, (HQ, V), (V, 1), (i_h * G, i_v * BV), (G, BV), (1, 0))
+    desc_do = make_tensor_descriptor(do, [HQ, V], [V, 1], [G, BV])
     p_lse = lse + i_h * G + tl.arange(0, G)
     p_delta = delta + i_h * G + tl.arange(0, G)
 
@@ -193,7 +194,7 @@ def parallel_nsa_compression_bwd_kernel_dq(
     NC = (i_t + 1) // BS
 
     # [G, BV]
-    b_do = tl.load(p_do, boundary_check=(0, 1))
+    b_do = desc_do.load([i_h * G, i_v * BV])
     # [G]
     b_lse = tl.load(p_lse)
     b_delta = tl.load(p_delta)
@@ -202,12 +203,12 @@ def parallel_nsa_compression_bwd_kernel_dq(
     b_dq = tl.zeros([G, BK], dtype=tl.float32)
     for i_c in range(0, NC, BC):
         o_c = i_c + tl.arange(0, BC)
-        p_k = tl.make_block_ptr(k + (boc * H + i_h) * K, (K, TC), (1, H*K), (0, i_c), (BK, BC), (0, 1))
-        p_v = tl.make_block_ptr(v + (boc * H + i_h) * V, (V, TC), (1, H*V), (i_v * BV, i_c), (BV, BC), (0, 1))
+        desc_k = make_tensor_descriptor(k + (boc * H + i_h) * K, [TC, K], [H*K, 1], [BC, BK])
+        desc_v = make_tensor_descriptor(v + (boc * H + i_h) * V, [TC, V], [H*V, 1], [BC, BV])
         # [BK, BC]
-        b_k = tl.load(p_k, boundary_check=(0, 1))
+        b_k = tl.trans(desc_k.load([i_c, 0]))
         # [BV, BC]
-        b_v = tl.load(p_v, boundary_check=(0, 1))
+        b_v = tl.trans(desc_v.load([i_c, i_v * BV]))
 
         # [G, BC]
         b_s = tl.dot(b_q, b_k)
@@ -220,7 +221,7 @@ def parallel_nsa_compression_bwd_kernel_dq(
         # [G, BC] @ [BC, BK] -> [G, BK]
         b_dq += tl.dot(b_ds.to(b_k.dtype), tl.trans(b_k))
     b_dq *= scale
-    tl.store(p_dq, b_dq.to(p_dq.dtype.element_ty), boundary_check=(0, 1))
+    desc_dq.store([i_h * G, 0], b_dq.to(desc_dq.dtype))
 
 
 @triton.heuristics({
@@ -278,31 +279,31 @@ def parallel_nsa_compression_bwd_kernel_dkv(
         bos, eos = (i_b * T).to(tl.int64), (i_b * T + T).to(tl.int64)
         boc = i_b * tl.cdiv(T, BS)
 
-    p_k = tl.make_block_ptr(k + (boc * H + i_h) * K, (TC, K), (H*K, 1), (i_c * BC, 0), (BC, BK), (1, 0))
-    p_v = tl.make_block_ptr(v + (boc * H + i_h) * V, (TC, V), (H*V, 1), (i_c * BC, i_v * BV), (BC, BV), (1, 0))
-    p_dk = tl.make_block_ptr(dk + (i_v * all*H + boc * H + i_h) * K, (TC, K), (H*K, 1), (i_c * BC, 0), (BC, BK), (1, 0))
-    p_dv = tl.make_block_ptr(dv + (boc * H + i_h) * V, (TC, V), (H*V, 1), (i_c * BC, i_v * BV), (BC, BV), (1, 0))
+    desc_k = make_tensor_descriptor(k + (boc * H + i_h) * K, [TC, K], [H*K, 1], [BC, BK])
+    desc_v = make_tensor_descriptor(v + (boc * H + i_h) * V, [TC, V], [H*V, 1], [BC, BV])
+    desc_dk = make_tensor_descriptor(dk + (i_v * all*H + boc * H + i_h) * K, [TC, K], [H*K, 1], [BC, BK])
+    desc_dv = make_tensor_descriptor(dv + (boc * H + i_h) * V, [TC, V], [H*V, 1], [BC, BV])
 
     # [BC, BK]
-    b_k = tl.load(p_k, boundary_check=(0, 1))
+    b_k = desc_k.load([i_c * BC, 0])
     b_dk = tl.zeros([BC, BK], dtype=tl.float32)
     # [BC, BV]
-    b_v = tl.load(p_v, boundary_check=(0, 1))
+    b_v = desc_v.load([i_c * BC, i_v * BV])
     b_dv = tl.zeros([BC, BV], dtype=tl.float32)
 
     for i in range(i_c * BC * BS, T):
         o_c = i_c * BC + tl.arange(0, BC)
 
-        p_q = tl.make_block_ptr(q + (bos + i) * HQ*K, (HQ, K), (K, 1), (i_h * G, 0), (G, BK), (1, 0))
+        desc_q = make_tensor_descriptor(q + (bos + i) * HQ*K, [HQ, K], [K, 1], [G, BK])
         # [G, BK]
-        b_q = tl.load(p_q, boundary_check=(0, 1))
+        b_q = desc_q.load([i_h * G, 0])
         b_q = (b_q * scale).to(b_q.dtype)
 
-        p_do = tl.make_block_ptr(do + (bos + i) * HQ*V, (HQ, V), (V, 1), (i_h * G, i_v * BV), (G, BV), (1, 0))
+        desc_do = make_tensor_descriptor(do + (bos + i) * HQ*V, [HQ, V], [V, 1], [G, BV])
         p_lse = lse + (bos + i) * HQ + i_h * G + tl.arange(0, G)
         p_delta = delta + (bos + i) * HQ + i_h * G + tl.arange(0, G)
         # [G, BV]
-        b_do = tl.load(p_do, boundary_check=(0, 1))
+        b_do = desc_do.load([i_h * G, i_v * BV])
         # [G]
         b_lse = tl.load(p_lse)
         b_delta = tl.load(p_delta)
@@ -319,8 +320,8 @@ def parallel_nsa_compression_bwd_kernel_dkv(
         # [BC, G] @ [G, BK] -> [BC, BK]
         b_dk += tl.dot(b_ds.to(b_q.dtype), b_q)
 
-    tl.store(p_dk, b_dk.to(p_dk.dtype.element_ty), boundary_check=(0, 1))
-    tl.store(p_dv, b_dv.to(p_dv.dtype.element_ty), boundary_check=(0, 1))
+    desc_dk.store([i_c * BC, 0], b_dk.to(desc_dk.dtype))
+    desc_dv.store([i_c * BC, i_v * BV], b_dv.to(desc_dv.dtype))
 
 
 def parallel_nsa_compression_fwd(

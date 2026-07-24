@@ -10,6 +10,7 @@ import triton
 import triton.language as tl
 
 from fla.ops.utils import prepare_chunk_indices, prepare_chunk_offsets
+from fla.ops.utils.op import make_tensor_descriptor
 from fla.utils import check_shared_mem
 
 
@@ -63,39 +64,39 @@ def chunk_cumprod_householder_bwd_kernel(
 
     stride_h = H * K * K
     NT_small = tl.cdiv(min(S, T-i_s*S), BT)
-    p_dhc_whole = tl.make_block_ptr(dhc_whole, (K, K), (K, 1), (0, 0), (BK, BK), (1, 0))
+    desc_dhc_whole = make_tensor_descriptor(dhc_whole, [K, K], [K, 1], [BK, BK])
     b_dhc = tl.zeros([BK, BK], dtype=tl.float32)
-    b_dhc += tl.load(p_dhc_whole, boundary_check=(0, 1))
+    b_dhc += desc_dhc_whole.load([0, 0])
 
     # calculate dh
     for i_t_small in range(0, NT_small):
-        p_k = tl.make_block_ptr(k, (T, K), (H*K, 1), (i_s*S + i_t_small*BT, 0), (BT, BK), (1, 0))
-        p_dk = tl.make_block_ptr(dk, (T, K), (HQ*K, 1), (i_s*S + i_t_small*BT, 0), (BT, BK), (1, 0))
-        p_dk_new = tl.make_block_ptr(dk_new, (T, K), (HQ*K, 1), (i_s*S + i_t_small*BT, 0), (BT, BK), (1, 0))
-        p_hc = tl.make_block_ptr(hc_suffix + i_t_small * stride_h, (K, K), (K, 1), (0, 0), (BK, BK), (1, 0))
+        desc_k = make_tensor_descriptor(k, [T, K], [H*K, 1], [BT, BK])
+        desc_dk = make_tensor_descriptor(dk, [T, K], [HQ*K, 1], [BT, BK])
+        desc_dk_new = make_tensor_descriptor(dk_new, [T, K], [HQ*K, 1], [BT, BK])
+        desc_hc = make_tensor_descriptor(hc_suffix + i_t_small * stride_h, [K, K], [K, 1], [BK, BK])
 
-        b_k = tl.load(p_k, boundary_check=(0, 1))
-        b_dk = tl.load(p_dk, boundary_check=(0, 1))
+        b_k = desc_k.load([i_s*S + i_t_small*BT, 0])
+        b_dk = desc_dk.load([i_s*S + i_t_small*BT, 0])
 
-        p_w1 = tl.make_block_ptr(w1, (T, K), (H*K, 1), (i_s*S + i_t_small*BT, 0), (BT, BK), (1, 0))
-        p_w2 = tl.make_block_ptr(w2, (T, K), (H*K, 1), (i_s*S + i_t_small*BT, 0), (BT, BK), (1, 0))
+        desc_w1 = make_tensor_descriptor(w1, [T, K], [H*K, 1], [BT, BK])
+        desc_w2 = make_tensor_descriptor(w2, [T, K], [H*K, 1], [BT, BK])
 
-        b_w1 = tl.load(p_w1, boundary_check=(0, 1))
-        b_w2 = tl.load(p_w2, boundary_check=(0, 1))
-        b_hc = tl.load(p_hc, boundary_check=(0, 1))
+        b_w1 = desc_w1.load([i_s*S + i_t_small*BT, 0])
+        b_w2 = desc_w2.load([i_s*S + i_t_small*BT, 0])
+        b_hc = desc_hc.load([0, 0])
 
         b_dk_new = b_dk - tl.dot(b_dk.to(b_hc.dtype), b_hc)
-        tl.store(p_dk_new, b_dk_new.to(dk_new.dtype.element_ty), boundary_check=(0, 1))
+        desc_dk_new.store([i_s*S + i_t_small*BT, 0], b_dk_new.to(dk_new.dtype.element_ty))
 
         b_dh = b_dhc - tl.dot(tl.trans(b_hc), b_dhc.to(b_hc.dtype))
         b_dw2 = tl.dot(b_w1, b_dh.to(b_w1.dtype))
         b_dw1 = tl.dot(b_w2, tl.trans(b_dh.to(b_w2.dtype)))
 
-        p_dw1 = tl.make_block_ptr(dw1, (T, K), (HQ*K, 1), (i_s*S + i_t_small*BT, 0), (BT, BK), (1, 0))
-        p_dw2 = tl.make_block_ptr(dw2, (T, K), (HQ*K, 1), (i_s*S + i_t_small*BT, 0), (BT, BK), (1, 0))
+        desc_dw1 = make_tensor_descriptor(dw1, [T, K], [HQ*K, 1], [BT, BK])
+        desc_dw2 = make_tensor_descriptor(dw2, [T, K], [HQ*K, 1], [BT, BK])
 
-        tl.store(p_dw1, b_dw1.to(dw1.dtype.element_ty), boundary_check=(0, 1))
-        tl.store(p_dw2, b_dw2.to(dw2.dtype.element_ty), boundary_check=(0, 1))
+        desc_dw1.store([i_s*S + i_t_small*BT, 0], b_dw1.to(dw1.dtype.element_ty))
+        desc_dw2.store([i_s*S + i_t_small*BT, 0], b_dw2.to(dw2.dtype.element_ty))
 
         b_dhc = b_dhc - tl.dot(tl.dot(b_dhc.to(b_w2.dtype), tl.trans(b_w2)).to(b_w1.dtype), b_w1)
         b_dhc -= tl.dot(tl.trans(b_dk).to(b_k.dtype), b_k)

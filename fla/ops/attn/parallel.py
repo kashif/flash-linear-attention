@@ -15,6 +15,7 @@ from fla.ops.utils import prepare_chunk_indices
 from fla.ops.utils.constant import RCP_LN2
 from fla.ops.utils.cumsum import chunk_global_cumsum
 from fla.ops.utils.op import exp2, log2
+from fla.ops.utils.op import make_tensor_descriptor
 from fla.utils import autocast_custom_bwd, autocast_custom_fwd, check_shared_mem, contiguous
 
 
@@ -66,13 +67,12 @@ def parallel_attn_fwd_kernel(
         bos, eos = (i_n * T).to(tl.int64), (i_n * T + T).to(tl.int64)
     RCP_LN2: tl.constexpr = 1.4426950216
 
-    p_q = tl.make_block_ptr(q + (bos * HQ + i_hq) * K, (T, K), (HQ*K, 1), (i_t * BT, 0), (BT, BK), (1, 0))
-    p_o = tl.make_block_ptr(o + (bos * HQ + i_hq) * V, (T, V), (HQ*V, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
-    p_lse = tl.make_block_ptr(lse + bos * HQ + i_hq, (T,), (HQ,), (i_t * BT,), (BT,), (0,))
+    desc_q = make_tensor_descriptor(q + (bos * HQ + i_hq) * K, [T, K], [HQ*K, 1], [BT, BK])
+    desc_o = make_tensor_descriptor(o + (bos * HQ + i_hq) * V, [T, V], [HQ*V, 1], [BT, BV])
 
     # the Q block is kept in the shared memory throughout the whole kernel
     # [BT, BK]
-    b_q = tl.load(p_q, boundary_check=(0, 1))
+    b_q = desc_q.load([i_t * BT, 0])
     # [BT, BV]
     b_o = tl.zeros([BT, BV], dtype=tl.float32)
 
@@ -80,8 +80,7 @@ def parallel_attn_fwd_kernel(
     b_acc = tl.zeros([BT], dtype=tl.float32)
 
     if USE_G:
-        p_g = tl.make_block_ptr(g_cumsum + bos * HQ + i_hq, (T,), (HQ,), (i_t * BT,), (BT,), (0,))
-        b_gq = tl.load(p_g, boundary_check=(0,)).to(tl.float32)
+        b_gq = tl.load(g_cumsum + bos * HQ + i_hq + (i_t * BT + tl.arange(0, BT)) * HQ, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0).to(tl.float32)
     else:
         b_gq = None
 
@@ -98,12 +97,12 @@ def parallel_attn_fwd_kernel(
     i_start = tl.maximum((i_t * BT - W + 1) // BS * BS, 0) if USE_WINDOW else 0
 
     for i_s in range(i_start, i_t * BT, BS):
-        p_k = tl.make_block_ptr(k + (bos * H + i_h) * K, (K, T), (1, H*K), (0, i_s), (BK, BS), (0, 1))
-        p_v = tl.make_block_ptr(v + (bos * H + i_h) * V, (T, V), (H*V, 1), (i_s, i_v * BV), (BS, BV), (1, 0))
+        desc_k = make_tensor_descriptor(k + (bos * H + i_h) * K, [T, K], [H*K, 1], [BS, BK])
+        desc_v = make_tensor_descriptor(v + (bos * H + i_h) * V, [T, V], [H*V, 1], [BS, BV])
         # [BK, BS]
-        b_k = tl.load(p_k, boundary_check=(0, 1))
+        b_k = tl.trans(desc_k.load([i_s, 0]))
         # [BS, BV]
-        b_v = tl.load(p_v, boundary_check=(0, 1))
+        b_v = desc_v.load([i_s, i_v * BV])
         # [BT, BS]
         b_s = tl.dot(b_q, b_k) * scale * RCP_LN2
 
@@ -131,16 +130,16 @@ def parallel_attn_fwd_kernel(
         b_mp = b_m
 
     for i_s in range(i_t * BT, min((i_t + 1) * BT, T), BS):
-        p_k = tl.make_block_ptr(k + (bos * H + i_h) * K, (K, T), (1, H*K), (0, i_s), (BK, BS), (0, 1))
-        p_v = tl.make_block_ptr(v + (bos * H + i_h) * V, (T, V), (H*V, 1), (i_s, i_v * BV), (BS, BV), (1, 0))
+        desc_k = make_tensor_descriptor(k + (bos * H + i_h) * K, [T, K], [H*K, 1], [BS, BK])
+        desc_v = make_tensor_descriptor(v + (bos * H + i_h) * V, [T, V], [H*V, 1], [BS, BV])
 
         # [BS]
         o_k = i_s + tl.arange(0, BS)
         m_k = o_k < T
         # [BK, BS]
-        b_k = tl.load(p_k, boundary_check=(0, 1))
+        b_k = tl.trans(desc_k.load([i_s, 0]))
         # [BS, BV]
-        b_v = tl.load(p_v, boundary_check=(0, 1))
+        b_v = desc_v.load([i_s, i_v * BV])
         # [BT, BS]
         b_s = tl.dot(b_q, b_k) * scale * RCP_LN2
 
@@ -176,9 +175,9 @@ def parallel_attn_fwd_kernel(
 
     b_o = b_o / b_acc[:, None]
     b_m += log2(b_acc)
-    tl.store(p_o, b_o.to(p_o.dtype.element_ty), boundary_check=(0, 1))
+    desc_o.store([i_t * BT, i_v * BV], b_o.to(desc_o.dtype))
     if i_v == 0:
-        tl.store(p_lse, b_m.to(p_lse.dtype.element_ty), boundary_check=(0,))
+        tl.store(lse + bos * HQ + i_hq + (i_t * BT + tl.arange(0, BS)) * HQ, b_m.to((lse + bos * HQ + i_hq).dtype.element_ty), mask=(i_t * BT + tl.arange(0, BS)) < T)
 
 
 @triton.jit
@@ -249,26 +248,23 @@ def parallel_attn_bwd_kernel_dq(
     # NOTE: we must multiply RCP_LN2 after tl.dot for high precision
     RCP_LN2: tl.constexpr = 1.4426950216
 
-    p_q = tl.make_block_ptr(q + (bos * HQ + i_hq) * K, (T, K), (HQ*K, 1), (i_t * BT, 0), (BT, BK), (1, 0))
-    p_dq = tl.make_block_ptr(dq + (bos * HQ + i_hq) * K, (T, K), (HQ*K, 1), (i_t * BT, 0), (BT, BK), (1, 0))
-    p_do = tl.make_block_ptr(do + (bos * HQ + i_hq) * V, (T, V), (HQ*V, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
-    p_lse = tl.make_block_ptr(lse + bos * HQ + i_hq, (T,), (HQ,), (i_t * BT,), (BT,), (0,))
-    p_delta = tl.make_block_ptr(delta + bos * HQ + i_hq, (T,), (HQ,), (i_t * BT,), (BT,), (0,))
+    desc_q = make_tensor_descriptor(q + (bos * HQ + i_hq) * K, [T, K], [HQ*K, 1], [BT, BK])
+    desc_dq = make_tensor_descriptor(dq + (bos * HQ + i_hq) * K, [T, K], [HQ*K, 1], [BT, BK])
+    desc_do = make_tensor_descriptor(do + (bos * HQ + i_hq) * V, [T, V], [HQ*V, 1], [BT, BV])
 
     # [BT, BK]
-    b_q = tl.load(p_q, boundary_check=(0, 1))
+    b_q = desc_q.load([i_t * BT, 0])
     # [BT, BV]
-    b_do = tl.load(p_do, boundary_check=(0, 1))
+    b_do = desc_do.load([i_t * BT, i_v * BV])
     # [BT]
-    b_lse = tl.load(p_lse, boundary_check=(0,))
-    b_delta = tl.load(p_delta, boundary_check=(0,))
+    b_lse = tl.load(lse + bos * HQ + i_hq + (i_t * BT + tl.arange(0, BS)) * HQ, mask=(i_t * BT + tl.arange(0, BS)) < T, other=0)
+    b_delta = tl.load(delta + bos * HQ + i_hq + (i_t * BT + tl.arange(0, BS)) * HQ, mask=(i_t * BT + tl.arange(0, BS)) < T, other=0)
 
     # [BT, BK]
     b_dq = tl.zeros([BT, BK], dtype=tl.float32)
     if USE_G:
         b_dg = tl.zeros([BT], dtype=tl.float32)
-        p_gq = tl.make_block_ptr(g_cumsum + bos * HQ + i_hq, (T,), (HQ,), (i_t * BT,), (BT,), (0,))
-        b_gq = tl.load(p_gq, boundary_check=(0,)).to(tl.float32)
+        b_gq = tl.load(g_cumsum + bos * HQ + i_hq + (i_t * BT + tl.arange(0, BS)) * HQ, mask=(i_t * BT + tl.arange(0, BS)) < T, other=0).to(tl.float32)
     else:
         b_gq = None
         b_dg = None
@@ -278,15 +274,15 @@ def parallel_attn_bwd_kernel_dq(
     i_start = tl.maximum((i_t * BT - W + 1) // BS * BS, 0) if USE_WINDOW else 0
 
     for i_s in range(i_start, i_t * BT, BS):
-        p_k = tl.make_block_ptr(k + (bos * H + i_h) * K, (K, T), (1, H*K), (0, i_s), (BK, BS), (0, 1))
-        p_v = tl.make_block_ptr(v + (bos * H + i_h) * V, (V, T), (1, H*V), (i_v * BV, i_s), (BV, BS), (0, 1))
+        desc_k = make_tensor_descriptor(k + (bos * H + i_h) * K, [T, K], [H*K, 1], [BS, BK])
+        desc_v = make_tensor_descriptor(v + (bos * H + i_h) * V, [T, V], [H*V, 1], [BS, BV])
 
         o_k = i_s + tl.arange(0, BS)
         m_k = o_k < T
         # [BK, BS]
-        b_k = tl.load(p_k, boundary_check=(0, 1))
+        b_k = tl.trans(desc_k.load([i_s, 0]))
         # [BV, BS]
-        b_v = tl.load(p_v, boundary_check=(0, 1))
+        b_v = tl.trans(desc_v.load([i_s, i_v * BV]))
         # [BT, BS]
         b_s = tl.dot(b_q, b_k) * scale * RCP_LN2
         if USE_G:
@@ -305,22 +301,21 @@ def parallel_attn_bwd_kernel_dq(
             b_dg += tl.sum(b_ds, 1)
 
     for i_s in range(i_t * BT, min((i_t + 1) * BT, T), BS):
-        p_k = tl.make_block_ptr(k + (bos * H + i_h) * K, (K, T), (1, H*K), (0, i_s), (BK, BS), (0, 1))
-        p_v = tl.make_block_ptr(v + (bos * H + i_h) * V, (V, T), (1, H*V), (i_v * BV, i_s), (BV, BS), (0, 1))
+        desc_k = make_tensor_descriptor(k + (bos * H + i_h) * K, [T, K], [H*K, 1], [BS, BK])
+        desc_v = make_tensor_descriptor(v + (bos * H + i_h) * V, [T, V], [H*V, 1], [BS, BV])
 
         # [BS]
         o_k = i_s + tl.arange(0, BS)
         m_k = o_k < T
         # [BK, BS]
-        b_k = tl.load(p_k, boundary_check=(0, 1))
+        b_k = tl.trans(desc_k.load([i_s, 0]))
         # [BV, BS]
-        b_v = tl.load(p_v, boundary_check=(0, 1))
+        b_v = tl.trans(desc_v.load([i_s, i_v * BV]))
         # [BT, BS]
         b_s = tl.dot(b_q, b_k) * scale * RCP_LN2
 
         if USE_G:
-            p_gk = tl.make_block_ptr(g_cumsum + bos * HQ + i_hq, (T,), (HQ,), (i_s,), (BS,), (0,))
-            b_gk = tl.load(p_gk, boundary_check=(0,)).to(tl.float32)
+            b_gk = tl.load(g_cumsum + bos * HQ + i_hq + (i_s + tl.arange(0, BT)) * HQ, mask=(i_s + tl.arange(0, BT)) < T, other=0).to(tl.float32)
             b_s += b_gq[:, None] - b_gk[None, :]
         if USE_WINDOW:
             b_p = tl.where(
@@ -339,10 +334,9 @@ def parallel_attn_bwd_kernel_dq(
             b_dg += tl.sum(b_ds, 1)
 
     b_dq *= scale
-    tl.store(p_dq, b_dq.to(p_dq.dtype.element_ty), boundary_check=(0, 1))
+    desc_dq.store([i_t * BT, 0], b_dq.to(desc_dq.dtype))
     if USE_G:
-        p_dg = tl.make_block_ptr(dg_cumsum + bos * HQ + i_hq, (T,), (HQ,), (i_t * BT,), (BT,), (0,))
-        tl.store(p_dg, b_dg.to(p_dg.dtype.element_ty), boundary_check=(0,))
+        tl.store(dg_cumsum + bos * HQ + i_hq + (i_t * BT + tl.arange(0, BT)) * HQ, b_dg.to((dg_cumsum + bos * HQ + i_hq).dtype.element_ty), mask=(i_t * BT + tl.arange(0, BT)) < T)
 
 
 @triton.heuristics({
@@ -394,49 +388,45 @@ def parallel_attn_bwd_kernel_dkv(
         bos, eos = (i_n * T).to(tl.int64), (i_n * T + T).to(tl.int64)
     RCP_LN2: tl.constexpr = 1.4426950216
 
-    p_k = tl.make_block_ptr(k + (bos * H + i_h) * K, (T, K), (H*K, 1), (i_t * BT, 0), (BT, BK), (1, 0))
-    p_v = tl.make_block_ptr(v + (bos * H + i_h) * V, (T, V), (H*V, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
-    p_dk = tl.make_block_ptr(dk + (bos * HQ + i_hq) * K, (T, K), (HQ*K, 1), (i_t * BT, 0), (BT, BK), (1, 0))
-    p_dv = tl.make_block_ptr(dv + (bos * HQ + i_hq) * V, (T, V), (HQ*V, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
+    desc_k = make_tensor_descriptor(k + (bos * H + i_h) * K, [T, K], [H*K, 1], [BT, BK])
+    desc_v = make_tensor_descriptor(v + (bos * H + i_h) * V, [T, V], [H*V, 1], [BT, BV])
+    desc_dk = make_tensor_descriptor(dk + (bos * HQ + i_hq) * K, [T, K], [HQ*K, 1], [BT, BK])
+    desc_dv = make_tensor_descriptor(dv + (bos * HQ + i_hq) * V, [T, V], [HQ*V, 1], [BT, BV])
 
     # [BT, BK]
-    b_k = tl.load(p_k, boundary_check=(0, 1))
+    b_k = desc_k.load([i_t * BT, 0])
     b_dk = tl.zeros([BT, BK], dtype=tl.float32)
     # [BT, BV]
-    b_v = tl.load(p_v, boundary_check=(0, 1))
+    b_v = desc_v.load([i_t * BT, i_v * BV])
     b_dv = tl.zeros([BT, BV], dtype=tl.float32)
 
     o_k = i_t * BT + tl.arange(0, BT)
 
     if USE_G:
-        p_gk = tl.make_block_ptr(g_cumsum + bos * HQ + i_hq, (T,), (HQ,), (i_t * BT,), (BT,), (0,))
-        b_gk = tl.load(p_gk, boundary_check=(0,)).to(tl.float32)
+        b_gk = tl.load(g_cumsum + bos * HQ + i_hq + (i_t * BT + tl.arange(0, BT)) * HQ, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0).to(tl.float32)
         b_dg = tl.zeros([BT], dtype=tl.float32)
     else:
         b_gk = None
         b_dg = None
 
     for i_s in range(i_t * BT, min((i_t + 1) * BT, T), BS):
-        p_q = tl.make_block_ptr(q + (bos * HQ + i_hq) * K, (T, K), (HQ*K, 1), (i_s, 0), (BS, BK), (1, 0))
-        p_do = tl.make_block_ptr(do + (bos * HQ + i_hq) * V, (T, V), (HQ*V, 1), (i_s, i_v * BV), (BS, BV), (1, 0))
-        p_lse = tl.make_block_ptr(lse + bos * HQ + i_hq, (T,), (HQ,), (i_s,), (BS,), (0,))
-        p_delta = tl.make_block_ptr(delta + bos * HQ + i_hq, (T,), (HQ,), (i_s,), (BS,), (0,))
+        desc_q = make_tensor_descriptor(q + (bos * HQ + i_hq) * K, [T, K], [HQ*K, 1], [BS, BK])
+        desc_do = make_tensor_descriptor(do + (bos * HQ + i_hq) * V, [T, V], [HQ*V, 1], [BS, BV])
 
         # [BS]
         o_q = i_s + tl.arange(0, BS)
         m_q = o_q < T
         # [BS, BK]
-        b_q = tl.load(p_q, boundary_check=(0, 1))
+        b_q = desc_q.load([i_s, 0])
         # [BS, BV]
-        b_do = tl.load(p_do, boundary_check=(0, 1))
+        b_do = desc_do.load([i_s, i_v * BV])
         # [BS]
-        b_lse = tl.load(p_lse, boundary_check=(0,))
-        b_delta = tl.load(p_delta, boundary_check=(0,))
+        b_lse = tl.load(lse + bos * HQ + i_hq + (i_s + tl.arange(0, BS)) * HQ, mask=(i_s + tl.arange(0, BS)) < T, other=0)
+        b_delta = tl.load(delta + bos * HQ + i_hq + (i_s + tl.arange(0, BS)) * HQ, mask=(i_s + tl.arange(0, BS)) < T, other=0)
         # [BT, BS]
         b_s = tl.dot(b_k, tl.trans(b_q)) * scale * RCP_LN2
         if USE_G:
-            p_gq = tl.make_block_ptr(g_cumsum + bos * HQ + i_hq, (T,), (HQ,), (i_s,), (BS,), (0,))
-            b_gq = tl.load(p_gq, boundary_check=(0,)).to(tl.float32)
+            b_gq = tl.load(g_cumsum + bos * HQ + i_hq + (i_s + tl.arange(0, BS)) * HQ, mask=(i_s + tl.arange(0, BS)) < T, other=0).to(tl.float32)
             b_s += b_gq[None, :] - b_gk[:, None]
         if USE_WINDOW:
             b_p = tl.where(
@@ -462,26 +452,23 @@ def parallel_attn_bwd_kernel_dkv(
     i_end = min(tl.cdiv(T, BS) * BS, (i_t + 1) * BT + W - 1) if USE_WINDOW else tl.cdiv(T, BS) * BS
 
     for i_s in range((i_t + 1) * BT, i_end, BS):
-        p_q = tl.make_block_ptr(q + (bos * HQ + i_hq) * K, (T, K), (HQ*K, 1), (i_s, 0), (BS, BK), (1, 0))
-        p_do = tl.make_block_ptr(do + (bos * HQ + i_hq) * V, (T, V), (HQ*V, 1), (i_s, i_v * BV), (BS, BV), (1, 0))
-        p_lse = tl.make_block_ptr(lse + bos * HQ + i_hq, (T,), (HQ,), (i_s,), (BS,), (0,))
-        p_delta = tl.make_block_ptr(delta + bos * HQ + i_hq, (T,), (HQ,), (i_s,), (BS,), (0,))
+        desc_q = make_tensor_descriptor(q + (bos * HQ + i_hq) * K, [T, K], [HQ*K, 1], [BS, BK])
+        desc_do = make_tensor_descriptor(do + (bos * HQ + i_hq) * V, [T, V], [HQ*V, 1], [BS, BV])
 
         # [BS]
         o_q = i_s + tl.arange(0, BS)
         m_q = o_q < T
         # [BS, BK]
-        b_q = tl.load(p_q, boundary_check=(0, 1))
+        b_q = desc_q.load([i_s, 0])
         # [BS, BV]
-        b_do = tl.load(p_do, boundary_check=(0, 1))
+        b_do = desc_do.load([i_s, i_v * BV])
         # [BS]
-        b_lse = tl.load(p_lse, boundary_check=(0,))
-        b_delta = tl.load(p_delta, boundary_check=(0,))
+        b_lse = tl.load(lse + bos * HQ + i_hq + (i_s + tl.arange(0, BS)) * HQ, mask=(i_s + tl.arange(0, BS)) < T, other=0)
+        b_delta = tl.load(delta + bos * HQ + i_hq + (i_s + tl.arange(0, BS)) * HQ, mask=(i_s + tl.arange(0, BS)) < T, other=0)
         # [BT, BS]
         b_s = tl.dot(b_k, tl.trans(b_q)) * scale * RCP_LN2
         if USE_G:
-            p_gq = tl.make_block_ptr(g_cumsum + bos * HQ + i_hq, (T,), (HQ,), (i_s,), (BS,), (0,))
-            b_gq = tl.load(p_gq, boundary_check=(0,)).to(tl.float32)
+            b_gq = tl.load(g_cumsum + bos * HQ + i_hq + (i_s + tl.arange(0, BS)) * HQ, mask=(i_s + tl.arange(0, BS)) < T, other=0).to(tl.float32)
             b_s += b_gq[None, :] - b_gk[:, None]
         if USE_WINDOW:
             b_p = tl.where((o_q[None, :] - o_k[:, None] < W) & m_q[None, :], exp2(b_s - b_lse[None, :]), 0)
@@ -499,11 +486,10 @@ def parallel_attn_bwd_kernel_dkv(
             b_dg -= tl.sum(b_ds, 1)
 
     b_dk = b_dk * scale
-    tl.store(p_dk, b_dk.to(p_dk.dtype.element_ty), boundary_check=(0, 1))
-    tl.store(p_dv, b_dv.to(p_dv.dtype.element_ty), boundary_check=(0, 1))
+    desc_dk.store([i_t * BT, 0], b_dk.to(desc_dk.dtype))
+    desc_dv.store([i_t * BT, i_v * BV], b_dv.to(desc_dv.dtype))
     if USE_G:
-        p_dg = tl.make_block_ptr(dg_cumsum + bos * HQ + i_hq, (T,), (HQ,), (i_t * BT,), (BT,), (0,))
-        tl.store(p_dg, b_dg.to(p_dg.dtype.element_ty), boundary_check=(0,))
+        tl.store(dg_cumsum + bos * HQ + i_hq + (i_t * BT + tl.arange(0, BT)) * HQ, b_dg.to((dg_cumsum + bos * HQ + i_hq).dtype.element_ty), mask=(i_t * BT + tl.arange(0, BT)) < T)
 
 
 @dispatch('attn')

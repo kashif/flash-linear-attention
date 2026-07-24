@@ -28,6 +28,7 @@ import triton
 import triton.language as tl
 
 from fla.ops.utils.op import exp
+from fla.ops.utils.op import make_tensor_descriptor
 from fla.utils import autotune_cache_kwargs, input_guard
 
 
@@ -108,16 +109,16 @@ def chunk_hgrn_fwd_kernel_o(
     mask = o_d < D
 
     for i_t in range(1, tl.cdiv(T, BT)):
-        p_gc = tl.make_block_ptr(gc + i_b * s_b, (T, D), (s_t, s_d), (i_t * BT, i_d * BD), (BT, BD), (1, 0))
-        p_o = tl.make_block_ptr(o + i_b * s_b, (T, D), (s_t, s_d), (i_t * BT, i_d * BD), (BT, BD), (1, 0))
+        desc_gc = make_tensor_descriptor(gc + i_b * s_b, [T, D], [s_t, s_d], [BT, BD])
+        desc_o = make_tensor_descriptor(o + i_b * s_b, [T, D], [s_t, s_d], [BT, BD])
 
         # [BD,]
         b_h0 = tl.load(o + i_b * T * D + i_t * BT * D - D + o_d, mask=mask, other=0).to(tl.float32)
         # [BT, BD]
-        b_gc = tl.load(p_gc, boundary_check=(0, 1)).to(tl.float32)
-        b_o = tl.load(p_o, boundary_check=(0, 1)).to(tl.float32)
+        b_gc = desc_gc.load([i_t * BT, i_d * BD]).to(tl.float32)
+        b_o = desc_o.load([i_t * BT, i_d * BD]).to(tl.float32)
         b_o = b_o + exp(b_gc) * b_h0[None, :]
-        tl.store(p_o, b_o.to(p_o.dtype.element_ty), boundary_check=(0, 1))
+        desc_o.store([i_t * BT, i_d * BD], b_o.to(desc_o.dtype))
 
 
 @triton.autotune(
@@ -157,7 +158,7 @@ def chunk_hgrn_bwd_kernel_h(
         b_gc = tl.load(g + (i_b * T + i_t * BT + BT) * D + o_d, mask=mask, other=0).to(tl.float32)
     b_dh = tl.zeros([BD], dtype=tl.float32)
     for _ in range(BC - 1, -1, -1):
-        tl.store(p_gc, b_gc.to(p_gc.dtype.element_ty), mask=mask)
+        desc_gc.store([i_t * BT, i_d * BD], b_gc.to(desc_gc.dtype), mask=mask)
 
         b_g = tl.load(p_g, mask=mask, other=0).to(tl.float32)
         b_do = tl.load(p_do, mask=mask, other=0).to(tl.float32)
@@ -195,25 +196,25 @@ def chunk_hgrn_bwd_kernel_o(
     mask = o_d < D
 
     for i_t in range(tl.cdiv(T, BT) - 1, -1, -1):
-        p_g = tl.make_block_ptr(g + i_b * s_b, (T, D), (s_t, s_d), (i_t * BT, i_d * BD), (BT, BD), (1, 0))
-        p_gc = tl.make_block_ptr(gc + i_b * s_b, (T, D), (s_t, s_d), (i_t * BT, i_d * BD), (BT, BD), (1, 0))
-        p_o = tl.make_block_ptr(o + i_b * s_b, (T, D), (s_t, s_d), (i_t * BT - 1, i_d * BD), (BT, BD), (1, 0))
-        p_dx = tl.make_block_ptr(dx + i_b * s_b, (T, D), (s_t, s_d), (i_t * BT, i_d * BD), (BT, BD), (1, 0))
-        p_dg = tl.make_block_ptr(dg + i_b * s_b, (T, D), (s_t, s_d), (i_t * BT, i_d * BD), (BT, BD), (1, 0))
+        desc_g = make_tensor_descriptor(g + i_b * s_b, [T, D], [s_t, s_d], [BT, BD])
+        desc_gc = make_tensor_descriptor(gc + i_b * s_b, [T, D], [s_t, s_d], [BT, BD])
+        desc_o = make_tensor_descriptor(o + i_b * s_b, [T, D], [s_t, s_d], [BT, BD])
+        desc_dx = make_tensor_descriptor(dx + i_b * s_b, [T, D], [s_t, s_d], [BT, BD])
+        desc_dg = make_tensor_descriptor(dg + i_b * s_b, [T, D], [s_t, s_d], [BT, BD])
 
         # [BD,]
         mask_t = mask & ((i_t + 1) * BT < T)
         b_ht = tl.load(dx + i_b * T * D + (i_t + 1) * BT * D + o_d, mask=mask_t, other=0).to(tl.float32)
         # [BT, BD]
-        b_g = tl.load(p_g, boundary_check=(0, 1)).to(tl.float32)
-        b_gc = tl.load(p_gc, boundary_check=(0, 1)).to(tl.float32)
-        b_o = tl.load(p_o, boundary_check=(0, 1)).to(tl.float32)
-        b_dx = tl.load(p_dx, boundary_check=(0, 1)).to(tl.float32)
+        b_g = desc_g.load([i_t * BT, i_d * BD]).to(tl.float32)
+        b_gc = desc_gc.load([i_t * BT, i_d * BD]).to(tl.float32)
+        b_o = desc_o.load([i_t * BT - 1, i_d * BD]).to(tl.float32)
+        b_dx = desc_dx.load([i_t * BT, i_d * BD]).to(tl.float32)
 
         b_dx = b_dx + exp(b_gc) * b_ht[None, :]
         b_dg = b_o * b_dx * exp(b_g)
-        tl.store(p_dx, b_dx.to(p_dx.dtype.element_ty), boundary_check=(0, 1))
-        tl.store(p_dg, b_dg.to(p_dg.dtype.element_ty), boundary_check=(0, 1))
+        desc_dx.store([i_t * BT, i_d * BD], b_dx.to(desc_dx.dtype))
+        desc_dg.store([i_t * BT, i_d * BD], b_dg.to(desc_dg.dtype))
 
 
 class ChunkHGRNFunction(torch.autograd.Function):

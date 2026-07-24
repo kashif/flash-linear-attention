@@ -10,6 +10,7 @@ import triton
 import triton.language as tl
 
 from fla.ops.utils import prepare_chunk_indices
+from fla.ops.utils.op import make_tensor_descriptor
 
 
 @triton.heuristics({
@@ -41,19 +42,19 @@ def parallel_path_fwd_kernel_prepare_k_cache(
     w1 += (bos * H + i_h) * K
     w2 += (bos * H + i_h) * K
     # constants
-    p_k = tl.make_block_ptr(k, (T, K), (H*K, 1), (i_t * BT, 0), (BT, BK), (1, 0))
+    desc_k = make_tensor_descriptor(k, [T, K], [H*K, 1], [BT, BK])
     b_k = tl.zeros([BT, BK], dtype=tl.float32)
-    b_k += tl.load(p_k, boundary_check=(0, 1))
+    b_k += desc_k.load([i_t * BT, 0])
     for k_block_idx in range(i_t + 1, tl.cdiv(T, BT)):
-        p_w1 = tl.make_block_ptr(w1, (T, K), (H*K, 1), (k_block_idx * BT, 0), (BT, BK), (1, 0))
-        p_w2 = tl.make_block_ptr(w2, (T, K), (H*K, 1), (k_block_idx * BT, 0), (BT, BK), (1, 0))
-        b_w1 = tl.load(p_w1, boundary_check=(0, 1))
-        b_w2 = tl.load(p_w2, boundary_check=(0, 1))
+        desc_w1 = make_tensor_descriptor(w1, [T, K], [H*K, 1], [BT, BK])
+        desc_w2 = make_tensor_descriptor(w2, [T, K], [H*K, 1], [BT, BK])
+        b_w1 = desc_w1.load([k_block_idx * BT, 0])
+        b_w2 = desc_w2.load([k_block_idx * BT, 0])
         b_A = tl.dot(b_k.to(b_w2.dtype), tl.trans(b_w2))
         b_k = b_k - tl.dot(b_A.to(b_w1.dtype), b_w1)
 
-    p_k_new = tl.make_block_ptr(k_new, (T, K), (H*K, 1), (i_t * BT, 0), (BT, BK), (1, 0))
-    tl.store(p_k_new, b_k.to(p_k_new.dtype.element_ty), boundary_check=(0, 1))
+    desc_k_new = make_tensor_descriptor(k_new, [T, K], [H*K, 1], [BT, BK])
+    desc_k_new.store([i_t * BT, 0], b_k.to(desc_k_new.dtype))
 
 
 def prepare_k_cache_fn(k, w1, w2, cu_seqlens, BS, use_cache=False, chunk_indices: torch.LongTensor | None = None):

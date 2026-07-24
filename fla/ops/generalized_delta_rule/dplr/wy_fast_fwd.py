@@ -11,6 +11,7 @@ import triton.language as tl
 
 from fla.ops.utils import prepare_chunk_indices
 from fla.ops.utils.op import gather
+from fla.ops.utils.op import make_tensor_descriptor
 from fla.utils import IS_GATHER_SUPPORTED, autotune_cache_kwargs
 
 
@@ -45,9 +46,9 @@ def prepare_wy_repr_fwd_kernel_chunk32(
         T = eos - bos
     else:
         bos, eos = i_b * T, i_b * T + T
-    p_Aab = tl.make_block_ptr(A_ab + (bos*H + i_h) * BT, (T, BT), (H*BT, 1), (i_t * BT, 0), (BT, BT), (1, 0))
-    p_Aab_inv = tl.make_block_ptr(A_ab_inv + (bos*H + i_h) * BT, (T, BT), (H*BT, 1), (i_t * BT, 0), (BT, BT), (1, 0))
-    b_A_ab = tl.load(p_Aab, boundary_check=(0, 1))
+    desc_Aab = make_tensor_descriptor(A_ab + (bos*H + i_h) * BT, [T, BT], [H*BT, 1], [BT, BT])
+    desc_Aab_inv = make_tensor_descriptor(A_ab_inv + (bos*H + i_h) * BT, [T, BT], [H*BT, 1], [BT, BT])
+    b_A_ab = desc_Aab.load([i_t * BT, 0])
     b_A_ab = tl.where(tl.arange(0, BT)[:, None] > tl.arange(0, BT)[None, :], b_A_ab, 0)
     for i in range(1, BT):
         mask = tl.arange(0, BT) == i
@@ -55,7 +56,7 @@ def prepare_wy_repr_fwd_kernel_chunk32(
         b_a = b_a + tl.sum(b_a[:, None] * b_A_ab, 0) * (tl.arange(0, BT) < i)
         b_A_ab = tl.where(mask[:, None], b_a, b_A_ab)
     b_A_ab += tl.arange(0, BT)[:, None] == tl.arange(0, BT)[None, :]
-    tl.store(p_Aab_inv, b_A_ab.to(p_Aab_inv.dtype.element_ty), boundary_check=(0, 1))
+    desc_Aab_inv.store([i_t * BT, 0], b_A_ab.to(desc_Aab_inv.dtype))
 
 
 @triton.heuristics({
@@ -92,17 +93,17 @@ def prepare_wy_repr_fwd_kernel_chunk64(
     else:
         bos, eos = i_b * T, i_b * T + T
 
-    p_A1 = tl.make_block_ptr(A_ab + (bos*H + i_h) * BT, (T, BT), (H*BT, 1), (i_t * BT, 0), (BC, BC), (1, 0))
-    p_A2 = tl.make_block_ptr(A_ab + (bos*H + i_h) * BT, (T, BT), (H*BT, 1), (i_t * BT + BC, BC), (BC, BC), (1, 0))
-    p_A3 = tl.make_block_ptr(A_ab + (bos*H + i_h) * BT, (T, BT), (H*BT, 1), (i_t * BT + BC, 0), (BC, BC), (1, 0))
-    p_A_inv1 = tl.make_block_ptr(A_ab_inv + (bos*H + i_h) * BT, (T, BT), (H*BT, 1), (i_t * BT, 0), (BC, BC), (1, 0))
-    p_A_inv2 = tl.make_block_ptr(A_ab_inv + (bos*H + i_h) * BT, (T, BT), (H*BT, 1), (i_t * BT + BC, BC), (BC, BC), (1, 0))
-    p_A_inv3 = tl.make_block_ptr(A_ab_inv + (bos*H + i_h) * BT, (T, BT), (H*BT, 1), (i_t * BT + BC, 0), (BC, BC), (1, 0))
-    p_A_inv4 = tl.make_block_ptr(A_ab_inv + (bos*H + i_h) * BT, (T, BT), (H*BT, 1), (i_t * BT, BC), (BC, BC), (1, 0))
+    desc_A1 = make_tensor_descriptor(A_ab + (bos*H + i_h) * BT, [T, BT], [H*BT, 1], [BC, BC])
+    desc_A2 = make_tensor_descriptor(A_ab + (bos*H + i_h) * BT, [T, BT], [H*BT, 1], [BC, BC])
+    desc_A3 = make_tensor_descriptor(A_ab + (bos*H + i_h) * BT, [T, BT], [H*BT, 1], [BC, BC])
+    desc_A_inv1 = make_tensor_descriptor(A_ab_inv + (bos*H + i_h) * BT, [T, BT], [H*BT, 1], [BC, BC])
+    desc_A_inv2 = make_tensor_descriptor(A_ab_inv + (bos*H + i_h) * BT, [T, BT], [H*BT, 1], [BC, BC])
+    desc_A_inv3 = make_tensor_descriptor(A_ab_inv + (bos*H + i_h) * BT, [T, BT], [H*BT, 1], [BC, BC])
+    desc_A_inv4 = make_tensor_descriptor(A_ab_inv + (bos*H + i_h) * BT, [T, BT], [H*BT, 1], [BC, BC])
 
-    b_A = tl.load(p_A1, boundary_check=(0, 1))
-    b_A2 = tl.load(p_A2, boundary_check=(0, 1))
-    b_A3 = tl.load(p_A3, boundary_check=(0, 1))
+    b_A = desc_A1.load([i_t * BT, 0])
+    b_A2 = desc_A2.load([i_t * BT + BC, BC])
+    b_A3 = desc_A3.load([i_t * BT + BC, 0])
     b_A = tl.where(tl.arange(0, BC)[:, None] > tl.arange(0, BC)[None, :], b_A, 0)
     b_A2 = tl.where(tl.arange(0, BC)[:, None] > tl.arange(0, BC)[None, :], b_A2, 0)
 
@@ -130,11 +131,11 @@ def prepare_wy_repr_fwd_kernel_chunk64(
     b_A2 += tl.arange(0, BC)[:, None] == tl.arange(0, BC)[None, :]
     b_A3 = tl.dot(tl.dot(b_A2, b_A3), b_A)
     # tl.debug_barrier()
-    tl.store(p_A_inv1, b_A.to(p_A_inv1.dtype.element_ty, fp_downcast_rounding="rtne"), boundary_check=(0, 1))
-    tl.store(p_A_inv2, b_A2.to(p_A_inv2.dtype.element_ty, fp_downcast_rounding="rtne"), boundary_check=(0, 1))
-    tl.store(p_A_inv3, b_A3.to(p_A_inv3.dtype.element_ty, fp_downcast_rounding="rtne"), boundary_check=(0, 1))
+    desc_A_inv1.store([i_t * BT, 0], b_A.to(desc_A_inv1.dtype, fp_downcast_rounding="rtne"))
+    desc_A_inv2.store([i_t * BT + BC, BC], b_A2.to(desc_A_inv2.dtype, fp_downcast_rounding="rtne"))
+    desc_A_inv3.store([i_t * BT + BC, 0], b_A3.to(desc_A_inv3.dtype, fp_downcast_rounding="rtne"))
     # causal mask
-    tl.store(p_A_inv4, tl.zeros([BC, BC], dtype=tl.float32).to(p_A_inv4.dtype.element_ty), boundary_check=(0, 1))
+    desc_A_inv4.store([i_t * BT, BC], tl.zeros([BC, BC], dtype=tl.float32).to(desc_A_inv4.dtype))
 
 
 @triton.heuristics({
@@ -178,11 +179,11 @@ def wu_fwd_kernel(
         bos, eos = i_b * T, i_b * T + T
     o_s = tl.arange(0, BT)
 
-    p_A_ab_inv = tl.make_block_ptr(A_ab_inv + (bos*H + i_h) * BT, (T, BT), (H*BT, 1), (i_t * BT, 0), (BT, BT), (1, 0))
-    p_A_ak = tl.make_block_ptr(A_ak + (bos*H + i_h) * BT, (T, BT), (H*BT, 1), (i_t * BT, 0), (BT, BT), (1, 0))
+    desc_A_ab_inv = make_tensor_descriptor(A_ab_inv + (bos*H + i_h) * BT, [T, BT], [H*BT, 1], [BT, BT])
+    desc_A_ak = make_tensor_descriptor(A_ak + (bos*H + i_h) * BT, [T, BT], [H*BT, 1], [BT, BT])
 
-    b_Aab_inv = tl.load(p_A_ab_inv, boundary_check=(0, 1))
-    b_Aak = tl.load(p_A_ak, boundary_check=(0, 1))
+    b_Aab_inv = desc_A_ab_inv.load([i_t * BT, 0])
+    b_Aak = desc_A_ak.load([i_t * BT, 0])
     b_Aab_inv = tl.where(o_s[:, None] >= o_s[None, :], b_Aab_inv, 0)
     b_Aak = tl.where(o_s[:, None] > o_s[None, :], b_Aak, 0)
     # let's use tf32 here
@@ -192,18 +193,18 @@ def wu_fwd_kernel(
     b_Aab_inv = b_Aab_inv.to(ag.dtype.element_ty, fp_downcast_rounding="rtne")
 
     for i_k in range(tl.cdiv(K, BK)):
-        p_ag = tl.make_block_ptr(ag + (bos*H + i_h) * K, (T, K), (H*K, 1), (i_t * BT, i_k * BK), (BT, BK), (1, 0))
-        p_w = tl.make_block_ptr(w + (bos*H + i_h) * K, (T, K), (H*K, 1), (i_t * BT, i_k * BK), (BT, BK), (1, 0))
-        b_ag = tl.load(p_ag, boundary_check=(0, 1))
+        desc_ag = make_tensor_descriptor(ag + (bos*H + i_h) * K, [T, K], [H*K, 1], [BT, BK])
+        desc_w = make_tensor_descriptor(w + (bos*H + i_h) * K, [T, K], [H*K, 1], [BT, BK])
+        b_ag = desc_ag.load([i_t * BT, i_k * BK])
         b_w = tl.dot(b_Aab_inv, b_ag)  # both bf16 or fp16
-        tl.store(p_w, b_w.to(p_w.dtype.element_ty, fp_downcast_rounding="rtne"), boundary_check=(0, 1))
+        desc_w.store([i_t * BT, i_k * BK], b_w.to(desc_w.dtype, fp_downcast_rounding="rtne"))
 
     for i_v in range(tl.cdiv(V, BV)):
-        p_v = tl.make_block_ptr(v + (bos*H + i_h) * V, (T, V), (H*V, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
-        p_u = tl.make_block_ptr(u + (bos*H + i_h) * V, (T, V), (H*V, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
-        b_v = tl.load(p_v, boundary_check=(0, 1))
+        desc_v = make_tensor_descriptor(v + (bos*H + i_h) * V, [T, V], [H*V, 1], [BT, BV])
+        desc_u = make_tensor_descriptor(u + (bos*H + i_h) * V, [T, V], [H*V, 1], [BT, BV])
+        b_v = desc_v.load([i_t * BT, i_v * BV])
         b_u = tl.dot(b_Aak, b_v)  # both bf16 or fp16
-        tl.store(p_u, b_u.to(p_u.dtype.element_ty, fp_downcast_rounding="rtne"), boundary_check=(0, 1))
+        desc_u.store([i_t * BT, i_v * BV], b_u.to(desc_u.dtype, fp_downcast_rounding="rtne"))
 
 
 def wu_fwd(

@@ -11,6 +11,7 @@ import triton.language as tl
 
 from fla.ops.utils import prepare_chunk_indices
 from fla.ops.utils.op import exp2, gather
+from fla.ops.utils.op import make_tensor_descriptor
 from fla.utils import IS_AMD, IS_GATHER_SUPPORTED, autotune_cache_kwargs
 
 NUM_WARPS_AUTOTUNE = [2, 4, 8, 16] if IS_AMD else [2, 4, 8, 16, 32]
@@ -74,26 +75,26 @@ def chunk_dplr_fwd_A_kernel_intra_sub_intra(
     m_A = (i_t * BT + tl.arange(0, BC)) < T
     last_idx = min((i_t+1) * BT, T) - 1
     o_A = (bos + i_t * BT + tl.arange(0, BC)) * H*BT + i_h * BT
-    p_q = tl.make_block_ptr(q + (bos * H + i_h) * K, (T, K), (H*K, 1), (i_t * BT, 0), (BC, BK), (1, 0))
-    p_k = tl.make_block_ptr(k + (bos * H + i_h) * K, (T, K), (H*K, 1), (i_t * BT, 0), (BC, BK), (1, 0))
-    p_a = tl.make_block_ptr(a + (bos * H + i_h) * K, (T, K), (H*K, 1), (i_t * BT, 0), (BC, BK), (1, 0))
-    p_b = tl.make_block_ptr(b + (bos * H + i_h) * K, (T, K), (H*K, 1), (i_t * BT, 0), (BC, BK), (1, 0))
-    p_gi = tl.make_block_ptr(gi + (bos * H + i_h) * K, (T, K), (H*K, 1), (i_t * BT, 0), (BC, BK), (1, 0))
-    p_ge = tl.make_block_ptr(ge + (bos * H + i_h) * K, (T, K), (H*K, 1), (i_t * BT, 0), (BC, BK), (1, 0))
+    desc_q = make_tensor_descriptor(q + (bos * H + i_h) * K, [T, K], [H*K, 1], [BC, BK])
+    desc_k = make_tensor_descriptor(k + (bos * H + i_h) * K, [T, K], [H*K, 1], [BC, BK])
+    desc_a = make_tensor_descriptor(a + (bos * H + i_h) * K, [T, K], [H*K, 1], [BC, BK])
+    desc_b = make_tensor_descriptor(b + (bos * H + i_h) * K, [T, K], [H*K, 1], [BC, BK])
+    desc_gi = make_tensor_descriptor(gi + (bos * H + i_h) * K, [T, K], [H*K, 1], [BC, BK])
+    desc_ge = make_tensor_descriptor(ge + (bos * H + i_h) * K, [T, K], [H*K, 1], [BC, BK])
     p_g_last = gi + (bos * H + i_h) * K + last_idx * H * K + tl.arange(0, BK)
     b_g_last = tl.load(p_g_last, mask=m_k, other=0)
-    p_qg = tl.make_block_ptr(qg + (bos * H + i_h) * K, (T, K), (H*K, 1), (i_t * BT, 0), (BC, BK), (1, 0))
-    p_kg = tl.make_block_ptr(kg + (bos * H + i_h) * K, (T, K), (H*K, 1), (i_t * BT, 0), (BC, BK), (1, 0))
-    p_ag = tl.make_block_ptr(ag + (bos * H + i_h) * K, (T, K), (H*K, 1), (i_t * BT, 0), (BC, BK), (1, 0))
-    p_bg = tl.make_block_ptr(bg + (bos * H + i_h) * K, (T, K), (H*K, 1), (i_t * BT, 0), (BC, BK), (1, 0))
+    desc_qg = make_tensor_descriptor(qg + (bos * H + i_h) * K, [T, K], [H*K, 1], [BC, BK])
+    desc_kg = make_tensor_descriptor(kg + (bos * H + i_h) * K, [T, K], [H*K, 1], [BC, BK])
+    desc_ag = make_tensor_descriptor(ag + (bos * H + i_h) * K, [T, K], [H*K, 1], [BC, BK])
+    desc_bg = make_tensor_descriptor(bg + (bos * H + i_h) * K, [T, K], [H*K, 1], [BC, BK])
 
-    b_q = tl.load(p_q, boundary_check=(0, 1))
+    b_q = desc_q.load([i_t * BT, 0])
     b_q = b_q * scale
-    b_k = tl.load(p_k, boundary_check=(0, 1))
-    b_a = tl.load(p_a, boundary_check=(0, 1))
-    b_b = tl.load(p_b, boundary_check=(0, 1))
-    b_gi = tl.load(p_gi, boundary_check=(0, 1)).to(tl.float32)
-    b_ge = tl.load(p_ge, boundary_check=(0, 1)).to(tl.float32)
+    b_k = desc_k.load([i_t * BT, 0])
+    b_a = desc_a.load([i_t * BT, 0])
+    b_b = desc_b.load([i_t * BT, 0])
+    b_gi = desc_gi.load([i_t * BT, 0]).to(tl.float32)
+    b_ge = desc_ge.load([i_t * BT, 0]).to(tl.float32)
 
     # deal with decay term.
     g_exp = exp2(b_gi)
@@ -102,10 +103,10 @@ def chunk_dplr_fwd_A_kernel_intra_sub_intra(
     b_kg = b_k * g_exp_inv
     b_bg = b_b * g_exp_inv
     b_ag = b_a * exp2(b_ge)
-    tl.store(p_qg, b_qg.to(p_qg.dtype.element_ty, fp_downcast_rounding="rtne"), boundary_check=(0, 1))
-    tl.store(p_bg, b_bg.to(p_bg.dtype.element_ty, fp_downcast_rounding="rtne"), boundary_check=(0, 1))
-    tl.store(p_ag, b_ag.to(p_ag.dtype.element_ty, fp_downcast_rounding="rtne"), boundary_check=(0, 1))
-    tl.store(p_kg, b_kg.to(p_kg.dtype.element_ty, fp_downcast_rounding="rtne"), boundary_check=(0, 1))
+    desc_qg.store([i_t * BT, 0], b_qg.to(desc_qg.dtype, fp_downcast_rounding="rtne"))
+    desc_bg.store([i_t * BT, 0], b_bg.to(desc_bg.dtype, fp_downcast_rounding="rtne"))
+    desc_ag.store([i_t * BT, 0], b_ag.to(desc_ag.dtype, fp_downcast_rounding="rtne"))
+    desc_kg.store([i_t * BT, 0], b_kg.to(desc_kg.dtype, fp_downcast_rounding="rtne"))
     # tl.debug_barrier()
 
     b_q = b_q.to(b_k.dtype)
@@ -199,19 +200,19 @@ def chunk_dplr_fwd_A_kernel_intra_tensorcore(
     offset_base = (bos * H + i_h) * K
 
     # Load the current chunk of Q, K, A, B and their gates
-    p_q = tl.make_block_ptr(q + offset_base, (T_len, K), (H*K, 1), (i_t * BT, 0), (BT, BK), (1, 0))
-    p_k = tl.make_block_ptr(k + offset_base, (T_len, K), (H*K, 1), (i_t * BT, 0), (BT, BK), (1, 0))
-    p_a = tl.make_block_ptr(a + offset_base, (T_len, K), (H*K, 1), (i_t * BT, 0), (BT, BK), (1, 0))
-    p_b = tl.make_block_ptr(b + offset_base, (T_len, K), (H*K, 1), (i_t * BT, 0), (BT, BK), (1, 0))
-    p_gi = tl.make_block_ptr(gi + offset_base, (T_len, K), (H*K, 1), (i_t * BT, 0), (BT, BK), (1, 0))
-    p_ge = tl.make_block_ptr(ge + offset_base, (T_len, K), (H*K, 1), (i_t * BT, 0), (BT, BK), (1, 0))
+    desc_q = make_tensor_descriptor(q + offset_base, [T_len, K], [H*K, 1], [BT, BK])
+    desc_k = make_tensor_descriptor(k + offset_base, [T_len, K], [H*K, 1], [BT, BK])
+    desc_a = make_tensor_descriptor(a + offset_base, [T_len, K], [H*K, 1], [BT, BK])
+    desc_b = make_tensor_descriptor(b + offset_base, [T_len, K], [H*K, 1], [BT, BK])
+    desc_gi = make_tensor_descriptor(gi + offset_base, [T_len, K], [H*K, 1], [BT, BK])
+    desc_ge = make_tensor_descriptor(ge + offset_base, [T_len, K], [H*K, 1], [BT, BK])
 
-    b_q = tl.load(p_q, boundary_check=(0, 1))
-    b_k = tl.load(p_k, boundary_check=(0, 1))
-    b_a = tl.load(p_a, boundary_check=(0, 1))
-    b_b = tl.load(p_b, boundary_check=(0, 1))
-    b_gi_val = tl.load(p_gi, boundary_check=(0, 1)).to(tl.float32)
-    b_ge_val = tl.load(p_ge, boundary_check=(0, 1)).to(tl.float32)
+    b_q = desc_q.load([i_t * BT, 0])
+    b_k = desc_k.load([i_t * BT, 0])
+    b_a = desc_a.load([i_t * BT, 0])
+    b_b = desc_b.load([i_t * BT, 0])
+    b_gi_val = desc_gi.load([i_t * BT, 0]).to(tl.float32)
+    b_ge_val = desc_ge.load([i_t * BT, 0]).to(tl.float32)
 
     # Calculate the index of the middle element of the valid part of the chunk
     valid_len = min(T_len - i_t * BT, BT)
@@ -254,20 +255,20 @@ def chunk_dplr_fwd_A_kernel_intra_tensorcore(
     exp_g_centered = exp2(b_g_centered)
 
     # Create pointers for writing
-    p_qg = tl.make_block_ptr(qg + offset_base, (T_len, K), (H*K, 1), (i_t * BT, 0), (BT, BK), (1, 0))
-    p_kg = tl.make_block_ptr(kg + offset_base, (T_len, K), (H*K, 1), (i_t * BT, 0), (BT, BK), (1, 0))
-    p_ag = tl.make_block_ptr(ag + offset_base, (T_len, K), (H*K, 1), (i_t * BT, 0), (BT, BK), (1, 0))
-    p_bg = tl.make_block_ptr(bg + offset_base, (T_len, K), (H*K, 1), (i_t * BT, 0), (BT, BK), (1, 0))
+    desc_qg = make_tensor_descriptor(qg + offset_base, [T_len, K], [H*K, 1], [BT, BK])
+    desc_kg = make_tensor_descriptor(kg + offset_base, [T_len, K], [H*K, 1], [BT, BK])
+    desc_ag = make_tensor_descriptor(ag + offset_base, [T_len, K], [H*K, 1], [BT, BK])
+    desc_bg = make_tensor_descriptor(bg + offset_base, [T_len, K], [H*K, 1], [BT, BK])
 
     # Store gated Q and A
-    tl.store(p_qg, (q_ops * exp_offset[None, :]).to(p_qg.dtype.element_ty), boundary_check=(0, 1))
-    tl.store(p_ag, (a_ops * exp_offset[None, :]).to(p_ag.dtype.element_ty), boundary_check=(0, 1))
+    desc_qg.store([i_t * BT, 0], (q_ops * exp_offset[None, :]).to(desc_qg.dtype))
+    desc_ag.store([i_t * BT, 0], (a_ops * exp_offset[None, :]).to(desc_ag.dtype))
 
     # Store gated K and B
     b_kg_g = k_ops * exp_g_centered[None, :]
     b_bg_g = b_ops * exp_g_centered[None, :]
-    tl.store(p_kg, b_kg_g.to(p_kg.dtype.element_ty), boundary_check=(0, 1))
-    tl.store(p_bg, b_bg_g.to(p_bg.dtype.element_ty), boundary_check=(0, 1))
+    desc_kg.store([i_t * BT, 0], b_kg_g.to(desc_kg.dtype))
+    desc_bg.store([i_t * BT, 0], b_bg_g.to(desc_bg.dtype))
 
     # Transpose K and B for dot product
     k_ops_t = tl.trans(k_ops)
@@ -295,15 +296,15 @@ def chunk_dplr_fwd_A_kernel_intra_tensorcore(
     # Store the intra-chunk attention matrices
     offset_out_base = (bos * H + i_h) * BT
 
-    p_Aqk = tl.make_block_ptr(Aqk + offset_out_base, (T_len, BT), (H*BT, 1), (i_t * BT, 0), (BT, BT), (1, 0))
-    p_Aqb = tl.make_block_ptr(Aqb + offset_out_base, (T_len, BT), (H*BT, 1), (i_t * BT, 0), (BT, BT), (1, 0))
-    p_Aak = tl.make_block_ptr(Aak + offset_out_base, (T_len, BT), (H*BT, 1), (i_t * BT, 0), (BT, BT), (1, 0))
-    p_Aab = tl.make_block_ptr(Aab + offset_out_base, (T_len, BT), (H*BT, 1), (i_t * BT, 0), (BT, BT), (1, 0))
+    desc_Aqk = make_tensor_descriptor(Aqk + offset_out_base, [T_len, BT], [H*BT, 1], [BT, BT])
+    desc_Aqb = make_tensor_descriptor(Aqb + offset_out_base, [T_len, BT], [H*BT, 1], [BT, BT])
+    desc_Aak = make_tensor_descriptor(Aak + offset_out_base, [T_len, BT], [H*BT, 1], [BT, BT])
+    desc_Aab = make_tensor_descriptor(Aab + offset_out_base, [T_len, BT], [H*BT, 1], [BT, BT])
 
-    tl.store(p_Aqk, b_A_qk.to(p_Aqk.dtype.element_ty), boundary_check=(0, 1))
-    tl.store(p_Aqb, b_A_qb.to(p_Aqb.dtype.element_ty), boundary_check=(0, 1))
-    tl.store(p_Aak, b_A_ak.to(p_Aak.dtype.element_ty), boundary_check=(0, 1))
-    tl.store(p_Aab, b_A_ab.to(p_Aab.dtype.element_ty), boundary_check=(0, 1))
+    desc_Aqk.store([i_t * BT, 0], b_A_qk.to(desc_Aqk.dtype))
+    desc_Aqb.store([i_t * BT, 0], b_A_qb.to(desc_Aqb.dtype))
+    desc_Aak.store([i_t * BT, 0], b_A_ak.to(desc_Aak.dtype))
+    desc_Aab.store([i_t * BT, 0], b_A_ab.to(desc_Aab.dtype))
 
 
 def chunk_dplr_fwd_intra(

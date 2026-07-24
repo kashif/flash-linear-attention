@@ -10,6 +10,7 @@ import triton
 import triton.language as tl
 
 from fla.ops.utils import get_max_num_splits, prepare_chunk_indices
+from fla.ops.utils.op import make_tensor_descriptor
 
 
 @triton.heuristics({
@@ -47,30 +48,28 @@ def transform_q_fwd_kernel(
         i_n = i_b
         bos, eos = (i_n * T).to(tl.int64), (i_n * T + T).to(tl.int64)
         # boh = i_n * tl.cdiv(T, BS)
-    p_q = tl.make_block_ptr(q + (bos * HQ + i_hq) * K, (T, K), (HQ*K, 1), (i_t * BT, 0), (BT, BK), (1, 0))
+    desc_q = make_tensor_descriptor(q + (bos * HQ + i_hq) * K, [T, K], [HQ*K, 1], [BT, BK])
     b_q = tl.zeros([BT, BK], dtype=tl.float32)
-    b_q += tl.load(p_q, boundary_check=(0, 1))
+    b_q += desc_q.load([i_t * BT, 0])
 
     if BS == BT:
         if (i_t * BT) % S == 0:
-            p_q_new = tl.make_block_ptr(q_new + ((bos.to(tl.int64) * NUM_BLOCKS + (i_t * BT // S)) * HQ + i_hq) * K,
-                                        (T, K), (HQ*K*NUM_BLOCKS, 1), (i_t * BT, 0), (BT, BK), (1, 0))
-            tl.store(p_q_new, b_q.to(q_new.dtype.element_ty), boundary_check=(0, 1))
+            desc_q_new = make_tensor_descriptor(q_new + ((bos.to(tl.int64) * NUM_BLOCKS + (i_t * BT // S)) * HQ + i_hq) * K, [T, K], [HQ*K*NUM_BLOCKS, 1], [BT, BK])
+            desc_q_new.store([i_t * BT, 0], b_q.to(q_new.dtype.element_ty))
 
     for offset in range((i_t + 1) * BT - 2 * BS, S-BS, -BS):
-        p_w1 = tl.make_block_ptr(w1 + (bos * H + i_h) * K, (K, T), (1, K*H), (0, offset), (BK, BS), (0, 1))
-        p_w2 = tl.make_block_ptr(w2 + (bos * H + i_h) * K, (T, K), (K*H, 1), (offset, 0), (BS, BK), (1, 0))
-        b_w1 = tl.load(p_w1, boundary_check=(0, 1))
-        b_w2 = tl.load(p_w2, boundary_check=(0, 1))
+        desc_w1 = make_tensor_descriptor(w1 + (bos * H + i_h) * K, [T, K], [K*H, 1], [BS, BK])
+        desc_w2 = make_tensor_descriptor(w2 + (bos * H + i_h) * K, [T, K], [K*H, 1], [BS, BK])
+        b_w1 = tl.trans(desc_w1.load([offset, 0]))
+        b_w2 = desc_w2.load([offset, 0])
         m_s = i_t * BT + tl.arange(0, BT) >= (offset + BS)
         b_s2 = tl.dot(b_q.to(b_w1.dtype), b_w1)
         b_s2 = tl.where(m_s[:, None], b_s2, 0)
         b_q -= tl.dot(b_s2.to(b_w2.dtype), b_w2)
 
         if offset % S == 0:
-            p_q_new = tl.make_block_ptr(q_new + ((bos.to(tl.int64) * NUM_BLOCKS + (offset // S)) * HQ + i_hq) * K,
-                                        (T, K), (HQ*K*NUM_BLOCKS, 1), (i_t * BT, 0), (BT, BK), (1, 0))
-            tl.store(p_q_new, b_q.to(q_new.dtype.element_ty), boundary_check=(0, 1))
+            desc_q_new = make_tensor_descriptor(q_new + ((bos.to(tl.int64) * NUM_BLOCKS + (offset // S)) * HQ + i_hq) * K, [T, K], [HQ*K*NUM_BLOCKS, 1], [BT, BK])
+            desc_q_new.store([i_t * BT, 0], b_q.to(q_new.dtype.element_ty))
 
 
 def transform_q_fwd_fn(

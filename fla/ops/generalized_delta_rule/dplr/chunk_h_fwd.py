@@ -11,6 +11,7 @@ import triton.language as tl
 
 from fla.ops.utils import prepare_chunk_indices, prepare_chunk_offsets
 from fla.ops.utils.op import exp2
+from fla.ops.utils.op import make_tensor_descriptor
 from fla.utils import IS_AMD, autotune_cache_kwargs, check_shared_mem
 
 NUM_WARPS_AUTOTUNE = [2, 4, 8, 16] if IS_AMD else [2, 4, 8, 16, 32]
@@ -72,31 +73,31 @@ def chunk_dplr_fwd_kernel_h(
     # [BK, BV]
     b_h = tl.zeros([BK, BV], dtype=tl.float32)
     if USE_INITIAL_STATE:
-        p_h0 = tl.make_block_ptr(h0 + i_nh * K*V, (K, V), (V, 1), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
-        b_h = tl.load(p_h0, boundary_check=(0, 1)).to(tl.float32)
+        desc_h0 = make_tensor_descriptor(h0 + i_nh * K*V, [K, V], [V, 1], [BK, BV])
+        b_h = desc_h0.load([i_k * BK, i_v * BV]).to(tl.float32)
 
     for i_t in range(NT):
-        p_h = tl.make_block_ptr(h + ((boh + i_t) * H + i_h) * K*V, (K, V), (V, 1), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
-        tl.store(p_h, b_h.to(p_h.dtype.element_ty), boundary_check=(0, 1))
+        desc_h = make_tensor_descriptor(h + ((boh + i_t) * H + i_h) * K*V, [K, V], [V, 1], [BK, BV])
+        desc_h.store([i_k * BK, i_v * BV], b_h.to(desc_h.dtype))
 
         b_hc = tl.zeros([BK, BV], dtype=tl.float32)
         # since we need to make all DK in the SRAM. we face serve SRAM memory burden. By subchunking we allievate such burden
         for i_c in range(tl.cdiv(min(BT, T - i_t * BT), BC)):
-            p_kg = tl.make_block_ptr(kg+(bos*H+i_h)*K, (K, T), (1, H*K), (i_k * BK, i_t * BT + i_c * BC), (BK, BC), (0, 1))
-            p_bg = tl.make_block_ptr(bg+(bos*H+i_h)*K, (K, T), (1, H*K), (i_k * BK, i_t * BT + i_c * BC), (BK, BC), (0, 1))
-            p_w = tl.make_block_ptr(w+(bos*H+i_h)*K, (T, K), (H*K, 1), (i_t * BT + i_c * BC, i_k * BK), (BC, BK), (1, 0))
-            p_v = tl.make_block_ptr(v+(bos*H+i_h)*V, (T, V), (H*V, 1), (i_t * BT + i_c * BC, i_v * BV), (BC, BV), (1, 0))
-            p_u = tl.make_block_ptr(u+(bos*H+i_h)*V, (T, V), (H*V, 1), (i_t * BT + i_c * BC, i_v * BV), (BC, BV), (1, 0))
-            p_v_new = tl.make_block_ptr(v_new+(bos*H+i_h)*V, (T, V), (H*V, 1), (i_t*BT+i_c*BC, i_v * BV), (BC, BV), (1, 0))
+            desc_kg = make_tensor_descriptor(kg+(bos*H+i_h)*K, [T, K], [H*K, 1], [BC, BK])
+            desc_bg = make_tensor_descriptor(bg+(bos*H+i_h)*K, [T, K], [H*K, 1], [BC, BK])
+            desc_w = make_tensor_descriptor(w+(bos*H+i_h)*K, [T, K], [H*K, 1], [BC, BK])
+            desc_v = make_tensor_descriptor(v+(bos*H+i_h)*V, [T, V], [H*V, 1], [BC, BV])
+            desc_u = make_tensor_descriptor(u+(bos*H+i_h)*V, [T, V], [H*V, 1], [BC, BV])
+            desc_v_new = make_tensor_descriptor(v_new+(bos*H+i_h)*V, [T, V], [H*V, 1], [BC, BV])
             # [BK, BC]
-            b_kg = tl.load(p_kg, boundary_check=(0, 1))
-            b_v = tl.load(p_v, boundary_check=(0, 1))
-            b_w = tl.load(p_w, boundary_check=(0, 1))
-            b_bg = tl.load(p_bg, boundary_check=(0, 1))
-            b_v2 = tl.dot(b_w, b_h.to(b_w.dtype)) + tl.load(p_u, boundary_check=(0, 1))
+            b_kg = tl.trans(desc_kg.load([i_t * BT + i_c * BC, i_k * BK]))
+            b_v = desc_v.load([i_t * BT + i_c * BC, i_v * BV])
+            b_w = desc_w.load([i_t * BT + i_c * BC, i_k * BK])
+            b_bg = tl.trans(desc_bg.load([i_t * BT + i_c * BC, i_k * BK]))
+            b_v2 = tl.dot(b_w, b_h.to(b_w.dtype)) + desc_u.load([i_t * BT + i_c * BC, i_v * BV])
             b_hc += tl.dot(b_kg, b_v)
             b_hc += tl.dot(b_bg.to(b_hc.dtype), b_v2)
-            tl.store(p_v_new, b_v2.to(p_v_new.dtype.element_ty), boundary_check=(0, 1))
+            desc_v_new.store([i_t*BT+i_c*BC, i_v * BV], b_v2.to(desc_v_new.dtype))
 
         last_idx = min((i_t + 1) * BT, T) - 1
         b_g_last = tl.load(gk + (bos + last_idx) * H*K + i_h * K + o_k, mask=o_k < K).to(tl.float32)
@@ -104,8 +105,8 @@ def chunk_dplr_fwd_kernel_h(
         b_h += b_hc
 
     if STORE_FINAL_STATE:
-        p_ht = tl.make_block_ptr(ht + i_nh * K*V, (K, V), (V, 1), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
-        tl.store(p_ht, b_h.to(p_ht.dtype.element_ty, fp_downcast_rounding="rtne"), boundary_check=(0, 1))
+        desc_ht = make_tensor_descriptor(ht + i_nh * K*V, [K, V], [V, 1], [BK, BV])
+        desc_ht.store([i_k * BK, i_v * BV], b_h.to(desc_ht.dtype, fp_downcast_rounding="rtne"))
 
 
 def chunk_dplr_fwd_h(

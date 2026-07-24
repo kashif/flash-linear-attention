@@ -29,6 +29,7 @@ from fla.ops.gdn2.wy_fast import recompute_w_u_fwd_gdn2
 from fla.ops.utils import prepare_chunk_indices
 from fla.ops.utils.cache import fla_cache_autotune
 from fla.ops.utils.op import exp2, gather
+from fla.ops.utils.op import make_tensor_descriptor
 from fla.utils import IS_GATHER_SUPPORTED, IS_TF32_SUPPORTED, autotune_cache_kwargs
 
 if IS_TF32_SUPPORTED:
@@ -93,15 +94,15 @@ def chunk_gdn2_fwd_kernel_intra_sub_chunk(
     Aqk = Aqk + (bos * H + i_h) * BT
     Akk = Akk + (bos * H + i_h) * BC
 
-    p_q = tl.make_block_ptr(q, (T, K), (H * K, 1), (i_ti, 0), (BC, BK), (1, 0))
-    p_k = tl.make_block_ptr(k, (T, K), (H * K, 1), (i_ti, 0), (BC, BK), (1, 0))
-    p_g = tl.make_block_ptr(g, (T, K), (H * K, 1), (i_ti, 0), (BC, BK), (1, 0))
-    p_b = tl.make_block_ptr(b, (T, K), (H * K, 1), (i_ti, 0), (BC, BK), (1, 0))
+    desc_q = make_tensor_descriptor(q, [T, K], [H * K, 1], [BC, BK])
+    desc_k = make_tensor_descriptor(k, [T, K], [H * K, 1], [BC, BK])
+    desc_g = make_tensor_descriptor(g, [T, K], [H * K, 1], [BC, BK])
+    desc_b = make_tensor_descriptor(b, [T, K], [H * K, 1], [BC, BK])
 
-    b_q = tl.load(p_q, boundary_check=(0, 1))
-    b_k = tl.load(p_k, boundary_check=(0, 1))
-    b_g = tl.load(p_g, boundary_check=(0, 1))
-    b_b = tl.load(p_b, boundary_check=(0, 1))
+    b_q = desc_q.load([i_ti, 0])
+    b_k = desc_k.load([i_ti, 0])
+    b_g = desc_g.load([i_ti, 0])
+    b_b = desc_b.load([i_ti, 0])
 
     if USE_GATHER:
         b_gn = gather(b_g, tl.full([1, BK], min(BC // 2, T - i_ti - 1), dtype=tl.int16), axis=0)
@@ -129,10 +130,10 @@ def chunk_gdn2_fwd_kernel_intra_sub_chunk(
     b_Aqk = tl.where(m_Aqk, b_Aqk, 0.0)
     b_Akk = tl.where(m_Akk, b_Akk, 0.0)
 
-    p_Aqk = tl.make_block_ptr(Aqk, (T, BT), (H * BT, 1), (i_ti, i_i * BC), (BC, BC), (1, 0))
-    p_Akk = tl.make_block_ptr(Akk, (T, BC), (H * BC, 1), (i_ti, 0), (BC, BC), (1, 0))
-    tl.store(p_Aqk, b_Aqk.to(Aqk.dtype.element_ty), boundary_check=(0, 1))
-    tl.store(p_Akk, b_Akk.to(Akk.dtype.element_ty), boundary_check=(0, 1))
+    desc_Aqk = make_tensor_descriptor(Aqk, [T, BT], [H * BT, 1], [BC, BC])
+    desc_Akk = make_tensor_descriptor(Akk, [T, BC], [H * BC, 1], [BC, BC])
+    desc_Aqk.store([i_ti, i_i * BC], b_Aqk.to(Aqk.dtype.element_ty))
+    desc_Akk.store([i_ti, 0], b_Akk.to(Akk.dtype.element_ty))
 
     tl.debug_barrier()
 
@@ -143,7 +144,7 @@ def chunk_gdn2_fwd_kernel_intra_sub_chunk(
         b_a += tl.sum(b_a[:, None] * b_Ai, 0)
         b_Ai = tl.where((o_i == i)[:, None], b_a, b_Ai)
     b_Ai += m_I
-    tl.store(p_Akk, b_Ai.to(Akk.dtype.element_ty), boundary_check=(0, 1))
+    desc_Akk.store([i_ti, 0], b_Ai.to(Akk.dtype.element_ty))
 
 
 @triton.heuristics({
@@ -229,20 +230,20 @@ def chunk_gdn2_fwd_kernel_inter_solve_fused(
         o_k = i_k * BK + tl.arange(0, BK)
         m_k = o_k < K
 
-        p_k0 = tl.make_block_ptr(k, (T, K), (H * K, 1), (i_tc0, i_k * BK), (BC, BK), (1, 0))
-        p_g0 = tl.make_block_ptr(g, (T, K), (H * K, 1), (i_tc0, i_k * BK), (BC, BK), (1, 0))
-        b_k0 = tl.load(p_k0, boundary_check=(0, 1)).to(tl.float32)
-        b_g0 = tl.load(p_g0, boundary_check=(0, 1)).to(tl.float32)
+        desc_k0 = make_tensor_descriptor(k, [T, K], [H * K, 1], [BC, BK])
+        desc_g0 = make_tensor_descriptor(g, [T, K], [H * K, 1], [BC, BK])
+        b_k0 = desc_k0.load([i_tc0, i_k * BK]).to(tl.float32)
+        b_g0 = desc_g0.load([i_tc0, i_k * BK]).to(tl.float32)
 
         if i_tc1 < T:
-            p_q1 = tl.make_block_ptr(q, (T, K), (H * K, 1), (i_tc1, i_k * BK), (BC, BK), (1, 0))
-            p_k1 = tl.make_block_ptr(k, (T, K), (H * K, 1), (i_tc1, i_k * BK), (BC, BK), (1, 0))
-            p_g1 = tl.make_block_ptr(g, (T, K), (H * K, 1), (i_tc1, i_k * BK), (BC, BK), (1, 0))
-            p_b1 = tl.make_block_ptr(b, (T, K), (H * K, 1), (i_tc1, i_k * BK), (BC, BK), (1, 0))
-            b_q1 = tl.load(p_q1, boundary_check=(0, 1)).to(tl.float32)
-            b_k1 = tl.load(p_k1, boundary_check=(0, 1)).to(tl.float32)
-            b_g1 = tl.load(p_g1, boundary_check=(0, 1)).to(tl.float32)
-            b_b1 = tl.load(p_b1, boundary_check=(0, 1)).to(tl.float32)
+            desc_q1 = make_tensor_descriptor(q, [T, K], [H * K, 1], [BC, BK])
+            desc_k1 = make_tensor_descriptor(k, [T, K], [H * K, 1], [BC, BK])
+            desc_g1 = make_tensor_descriptor(g, [T, K], [H * K, 1], [BC, BK])
+            desc_b1 = make_tensor_descriptor(b, [T, K], [H * K, 1], [BC, BK])
+            b_q1 = desc_q1.load([i_tc1, i_k * BK]).to(tl.float32)
+            b_k1 = desc_k1.load([i_tc1, i_k * BK]).to(tl.float32)
+            b_g1 = desc_g1.load([i_tc1, i_k * BK]).to(tl.float32)
+            b_b1 = desc_b1.load([i_tc1, i_k * BK]).to(tl.float32)
             b_gn1 = tl.load(g + i_tc1 * H * K + o_k, mask=m_k, other=0).to(tl.float32)
             b_gqn = tl.where(m_tc1[:, None], exp2(b_g1 - b_gn1[None, :]), 0)
             b_kgt = tl.trans(b_k0 * exp2(b_gn1[None, :] - b_g0))
@@ -251,14 +252,14 @@ def chunk_gdn2_fwd_kernel_inter_solve_fused(
             b_Akk10 += tl.dot(b_bk1 * b_gqn, b_kgt)
 
             if i_tc2 < T:
-                p_q2 = tl.make_block_ptr(q, (T, K), (H * K, 1), (i_tc2, i_k * BK), (BC, BK), (1, 0))
-                p_k2 = tl.make_block_ptr(k, (T, K), (H * K, 1), (i_tc2, i_k * BK), (BC, BK), (1, 0))
-                p_g2 = tl.make_block_ptr(g, (T, K), (H * K, 1), (i_tc2, i_k * BK), (BC, BK), (1, 0))
-                p_b2 = tl.make_block_ptr(b, (T, K), (H * K, 1), (i_tc2, i_k * BK), (BC, BK), (1, 0))
-                b_q2 = tl.load(p_q2, boundary_check=(0, 1)).to(tl.float32)
-                b_k2 = tl.load(p_k2, boundary_check=(0, 1)).to(tl.float32)
-                b_g2 = tl.load(p_g2, boundary_check=(0, 1)).to(tl.float32)
-                b_b2 = tl.load(p_b2, boundary_check=(0, 1)).to(tl.float32)
+                desc_q2 = make_tensor_descriptor(q, [T, K], [H * K, 1], [BC, BK])
+                desc_k2 = make_tensor_descriptor(k, [T, K], [H * K, 1], [BC, BK])
+                desc_g2 = make_tensor_descriptor(g, [T, K], [H * K, 1], [BC, BK])
+                desc_b2 = make_tensor_descriptor(b, [T, K], [H * K, 1], [BC, BK])
+                b_q2 = desc_q2.load([i_tc2, i_k * BK]).to(tl.float32)
+                b_k2 = desc_k2.load([i_tc2, i_k * BK]).to(tl.float32)
+                b_g2 = desc_g2.load([i_tc2, i_k * BK]).to(tl.float32)
+                b_b2 = desc_b2.load([i_tc2, i_k * BK]).to(tl.float32)
                 b_gn2 = tl.load(g + i_tc2 * H * K + o_k, mask=m_k, other=0).to(tl.float32)
                 b_gqn2 = tl.where(m_tc2[:, None], exp2(b_g2 - b_gn2[None, :]), 0)
                 b_qg2 = b_q2 * b_gqn2
@@ -271,14 +272,14 @@ def chunk_gdn2_fwd_kernel_inter_solve_fused(
                 b_Akk21 += tl.dot(b_bkg2, b_kgt)
 
                 if i_tc3 < T:
-                    p_q3 = tl.make_block_ptr(q, (T, K), (H * K, 1), (i_tc3, i_k * BK), (BC, BK), (1, 0))
-                    p_k3 = tl.make_block_ptr(k, (T, K), (H * K, 1), (i_tc3, i_k * BK), (BC, BK), (1, 0))
-                    p_g3 = tl.make_block_ptr(g, (T, K), (H * K, 1), (i_tc3, i_k * BK), (BC, BK), (1, 0))
-                    p_b3 = tl.make_block_ptr(b, (T, K), (H * K, 1), (i_tc3, i_k * BK), (BC, BK), (1, 0))
-                    b_q3 = tl.load(p_q3, boundary_check=(0, 1)).to(tl.float32)
-                    b_k3 = tl.load(p_k3, boundary_check=(0, 1)).to(tl.float32)
-                    b_g3 = tl.load(p_g3, boundary_check=(0, 1)).to(tl.float32)
-                    b_b3 = tl.load(p_b3, boundary_check=(0, 1)).to(tl.float32)
+                    desc_q3 = make_tensor_descriptor(q, [T, K], [H * K, 1], [BC, BK])
+                    desc_k3 = make_tensor_descriptor(k, [T, K], [H * K, 1], [BC, BK])
+                    desc_g3 = make_tensor_descriptor(g, [T, K], [H * K, 1], [BC, BK])
+                    desc_b3 = make_tensor_descriptor(b, [T, K], [H * K, 1], [BC, BK])
+                    b_q3 = desc_q3.load([i_tc3, i_k * BK]).to(tl.float32)
+                    b_k3 = desc_k3.load([i_tc3, i_k * BK]).to(tl.float32)
+                    b_g3 = desc_g3.load([i_tc3, i_k * BK]).to(tl.float32)
+                    b_b3 = desc_b3.load([i_tc3, i_k * BK]).to(tl.float32)
                     b_gn3 = tl.load(g + i_tc3 * H * K + o_k, mask=m_k, other=0).to(tl.float32)
                     b_gqn3 = tl.where(m_tc3[:, None], exp2(b_g3 - b_gn3[None, :]), 0)
                     b_qg3 = b_q3 * b_gqn3
@@ -294,29 +295,29 @@ def chunk_gdn2_fwd_kernel_inter_solve_fused(
                     b_Akk32 += tl.dot(b_bkg3, b_kgt)
 
     if i_tc1 < T:
-        p_Aqk10 = tl.make_block_ptr(Aqk, (T, BT), (H * BT, 1), (i_tc1, 0), (BC, BC), (1, 0))
-        tl.store(p_Aqk10, (b_Aqk10 * scale).to(Aqk.dtype.element_ty), boundary_check=(0, 1))
+        desc_Aqk10 = make_tensor_descriptor(Aqk, [T, BT], [H * BT, 1], [BC, BC])
+        desc_Aqk10.store([i_tc1, 0], (b_Aqk10 * scale).to(Aqk.dtype.element_ty))
     if i_tc2 < T:
-        p_Aqk20 = tl.make_block_ptr(Aqk, (T, BT), (H * BT, 1), (i_tc2, 0), (BC, BC), (1, 0))
-        p_Aqk21 = tl.make_block_ptr(Aqk, (T, BT), (H * BT, 1), (i_tc2, BC), (BC, BC), (1, 0))
-        tl.store(p_Aqk20, (b_Aqk20 * scale).to(Aqk.dtype.element_ty), boundary_check=(0, 1))
-        tl.store(p_Aqk21, (b_Aqk21 * scale).to(Aqk.dtype.element_ty), boundary_check=(0, 1))
+        desc_Aqk20 = make_tensor_descriptor(Aqk, [T, BT], [H * BT, 1], [BC, BC])
+        desc_Aqk21 = make_tensor_descriptor(Aqk, [T, BT], [H * BT, 1], [BC, BC])
+        desc_Aqk20.store([i_tc2, 0], (b_Aqk20 * scale).to(Aqk.dtype.element_ty))
+        desc_Aqk21.store([i_tc2, BC], (b_Aqk21 * scale).to(Aqk.dtype.element_ty))
     if i_tc3 < T:
-        p_Aqk30 = tl.make_block_ptr(Aqk, (T, BT), (H * BT, 1), (i_tc3, 0), (BC, BC), (1, 0))
-        p_Aqk31 = tl.make_block_ptr(Aqk, (T, BT), (H * BT, 1), (i_tc3, BC), (BC, BC), (1, 0))
-        p_Aqk32 = tl.make_block_ptr(Aqk, (T, BT), (H * BT, 1), (i_tc3, 2 * BC), (BC, BC), (1, 0))
-        tl.store(p_Aqk30, (b_Aqk30 * scale).to(Aqk.dtype.element_ty), boundary_check=(0, 1))
-        tl.store(p_Aqk31, (b_Aqk31 * scale).to(Aqk.dtype.element_ty), boundary_check=(0, 1))
-        tl.store(p_Aqk32, (b_Aqk32 * scale).to(Aqk.dtype.element_ty), boundary_check=(0, 1))
+        desc_Aqk30 = make_tensor_descriptor(Aqk, [T, BT], [H * BT, 1], [BC, BC])
+        desc_Aqk31 = make_tensor_descriptor(Aqk, [T, BT], [H * BT, 1], [BC, BC])
+        desc_Aqk32 = make_tensor_descriptor(Aqk, [T, BT], [H * BT, 1], [BC, BC])
+        desc_Aqk30.store([i_tc3, 0], (b_Aqk30 * scale).to(Aqk.dtype.element_ty))
+        desc_Aqk31.store([i_tc3, BC], (b_Aqk31 * scale).to(Aqk.dtype.element_ty))
+        desc_Aqk32.store([i_tc3, 2 * BC], (b_Aqk32 * scale).to(Aqk.dtype.element_ty))
 
-    p_Akk00 = tl.make_block_ptr(Akkd, (T, BC), (H * BC, 1), (i_tc0, 0), (BC, BC), (1, 0))
-    p_Akk11 = tl.make_block_ptr(Akkd, (T, BC), (H * BC, 1), (i_tc1, 0), (BC, BC), (1, 0))
-    p_Akk22 = tl.make_block_ptr(Akkd, (T, BC), (H * BC, 1), (i_tc2, 0), (BC, BC), (1, 0))
-    p_Akk33 = tl.make_block_ptr(Akkd, (T, BC), (H * BC, 1), (i_tc3, 0), (BC, BC), (1, 0))
-    b_Ai00 = tl.load(p_Akk00, boundary_check=(0, 1)).to(tl.float32)
-    b_Ai11 = tl.load(p_Akk11, boundary_check=(0, 1)).to(tl.float32)
-    b_Ai22 = tl.load(p_Akk22, boundary_check=(0, 1)).to(tl.float32)
-    b_Ai33 = tl.load(p_Akk33, boundary_check=(0, 1)).to(tl.float32)
+    desc_Akk00 = make_tensor_descriptor(Akkd, [T, BC], [H * BC, 1], [BC, BC])
+    desc_Akk11 = make_tensor_descriptor(Akkd, [T, BC], [H * BC, 1], [BC, BC])
+    desc_Akk22 = make_tensor_descriptor(Akkd, [T, BC], [H * BC, 1], [BC, BC])
+    desc_Akk33 = make_tensor_descriptor(Akkd, [T, BC], [H * BC, 1], [BC, BC])
+    b_Ai00 = desc_Akk00.load([i_tc0, 0]).to(tl.float32)
+    b_Ai11 = desc_Akk11.load([i_tc1, 0]).to(tl.float32)
+    b_Ai22 = desc_Akk22.load([i_tc2, 0]).to(tl.float32)
+    b_Ai33 = desc_Akk33.load([i_tc3, 0]).to(tl.float32)
 
     if not USE_SAFE_GATE:
         m_A = o_i[:, None] > o_i[None, :]
@@ -389,27 +390,27 @@ def chunk_gdn2_fwd_kernel_inter_solve_fused(
         input_precision=SOLVE_TRIL_DOT_PRECISION,
     )
 
-    p_Akk00 = tl.make_block_ptr(Akk, (T, BT), (H * BT, 1), (i_tc0, 0), (BC, BC), (1, 0))
-    p_Akk10 = tl.make_block_ptr(Akk, (T, BT), (H * BT, 1), (i_tc1, 0), (BC, BC), (1, 0))
-    p_Akk11 = tl.make_block_ptr(Akk, (T, BT), (H * BT, 1), (i_tc1, BC), (BC, BC), (1, 0))
-    p_Akk20 = tl.make_block_ptr(Akk, (T, BT), (H * BT, 1), (i_tc2, 0), (BC, BC), (1, 0))
-    p_Akk21 = tl.make_block_ptr(Akk, (T, BT), (H * BT, 1), (i_tc2, BC), (BC, BC), (1, 0))
-    p_Akk22 = tl.make_block_ptr(Akk, (T, BT), (H * BT, 1), (i_tc2, 2 * BC), (BC, BC), (1, 0))
-    p_Akk30 = tl.make_block_ptr(Akk, (T, BT), (H * BT, 1), (i_tc3, 0), (BC, BC), (1, 0))
-    p_Akk31 = tl.make_block_ptr(Akk, (T, BT), (H * BT, 1), (i_tc3, BC), (BC, BC), (1, 0))
-    p_Akk32 = tl.make_block_ptr(Akk, (T, BT), (H * BT, 1), (i_tc3, 2 * BC), (BC, BC), (1, 0))
-    p_Akk33 = tl.make_block_ptr(Akk, (T, BT), (H * BT, 1), (i_tc3, 3 * BC), (BC, BC), (1, 0))
+    desc_Akk00 = make_tensor_descriptor(Akk, [T, BT], [H * BT, 1], [BC, BC])
+    desc_Akk10 = make_tensor_descriptor(Akk, [T, BT], [H * BT, 1], [BC, BC])
+    desc_Akk11 = make_tensor_descriptor(Akk, [T, BT], [H * BT, 1], [BC, BC])
+    desc_Akk20 = make_tensor_descriptor(Akk, [T, BT], [H * BT, 1], [BC, BC])
+    desc_Akk21 = make_tensor_descriptor(Akk, [T, BT], [H * BT, 1], [BC, BC])
+    desc_Akk22 = make_tensor_descriptor(Akk, [T, BT], [H * BT, 1], [BC, BC])
+    desc_Akk30 = make_tensor_descriptor(Akk, [T, BT], [H * BT, 1], [BC, BC])
+    desc_Akk31 = make_tensor_descriptor(Akk, [T, BT], [H * BT, 1], [BC, BC])
+    desc_Akk32 = make_tensor_descriptor(Akk, [T, BT], [H * BT, 1], [BC, BC])
+    desc_Akk33 = make_tensor_descriptor(Akk, [T, BT], [H * BT, 1], [BC, BC])
 
-    tl.store(p_Akk00, b_Ai00.to(Akk.dtype.element_ty), boundary_check=(0, 1))
-    tl.store(p_Akk10, b_Ai10.to(Akk.dtype.element_ty), boundary_check=(0, 1))
-    tl.store(p_Akk11, b_Ai11.to(Akk.dtype.element_ty), boundary_check=(0, 1))
-    tl.store(p_Akk20, b_Ai20.to(Akk.dtype.element_ty), boundary_check=(0, 1))
-    tl.store(p_Akk21, b_Ai21.to(Akk.dtype.element_ty), boundary_check=(0, 1))
-    tl.store(p_Akk22, b_Ai22.to(Akk.dtype.element_ty), boundary_check=(0, 1))
-    tl.store(p_Akk30, b_Ai30.to(Akk.dtype.element_ty), boundary_check=(0, 1))
-    tl.store(p_Akk31, b_Ai31.to(Akk.dtype.element_ty), boundary_check=(0, 1))
-    tl.store(p_Akk32, b_Ai32.to(Akk.dtype.element_ty), boundary_check=(0, 1))
-    tl.store(p_Akk33, b_Ai33.to(Akk.dtype.element_ty), boundary_check=(0, 1))
+    desc_Akk00.store([i_tc0, 0], b_Ai00.to(Akk.dtype.element_ty))
+    desc_Akk10.store([i_tc1, 0], b_Ai10.to(Akk.dtype.element_ty))
+    desc_Akk11.store([i_tc1, BC], b_Ai11.to(Akk.dtype.element_ty))
+    desc_Akk20.store([i_tc2, 0], b_Ai20.to(Akk.dtype.element_ty))
+    desc_Akk21.store([i_tc2, BC], b_Ai21.to(Akk.dtype.element_ty))
+    desc_Akk22.store([i_tc2, 2 * BC], b_Ai22.to(Akk.dtype.element_ty))
+    desc_Akk30.store([i_tc3, 0], b_Ai30.to(Akk.dtype.element_ty))
+    desc_Akk31.store([i_tc3, BC], b_Ai31.to(Akk.dtype.element_ty))
+    desc_Akk32.store([i_tc3, 2 * BC], b_Ai32.to(Akk.dtype.element_ty))
+    desc_Akk33.store([i_tc3, 3 * BC], b_Ai33.to(Akk.dtype.element_ty))
 
 
 @triton.heuristics({
@@ -487,11 +488,11 @@ def chunk_gdn2_bwd_kernel_intra(
     dg2 += (bos * H + i_h) * K
     db += (i_k * all + bos) * H * BK + i_h * BK
 
-    p_g = tl.make_block_ptr(g, (T, K), (H * K, 1), (i_ti, i_k * BK), (BC, BK), (1, 0))
-    b_g = tl.load(p_g, boundary_check=(0, 1)).to(tl.float32)
+    desc_g = make_tensor_descriptor(g, [T, K], [H * K, 1], [BC, BK])
+    b_g = desc_g.load([i_ti, i_k * BK]).to(tl.float32)
 
-    p_b = tl.make_block_ptr(b, (T, K), (H * K, 1), (i_ti, i_k * BK), (BC, BK), (1, 0))
-    b_b = tl.load(p_b, boundary_check=(0, 1))
+    desc_b = make_tensor_descriptor(b, [T, K], [H * K, 1], [BC, BK])
+    b_b = desc_b.load([i_ti, i_k * BK])
 
     b_dq2 = tl.zeros([BC, BK], dtype=tl.float32)
     b_dk2 = tl.zeros([BC, BK], dtype=tl.float32)
@@ -500,15 +501,15 @@ def chunk_gdn2_bwd_kernel_intra(
         p_gn = g + i_ti * H * K + o_k
         b_gn = tl.load(p_gn, mask=m_k, other=0).to(tl.float32)[None, :]
         for i_j in range(0, i_i):
-            p_k = tl.make_block_ptr(k, (T, K), (H * K, 1), (i_t * BT + i_j * BC, i_k * BK), (BC, BK), (1, 0))
-            p_gk = tl.make_block_ptr(g, (T, K), (H * K, 1), (i_t * BT + i_j * BC, i_k * BK), (BC, BK), (1, 0))
-            p_dAqk = tl.make_block_ptr(dAqk, (T, BT), (H * BT, 1), (i_ti, i_j * BC), (BC, BC), (1, 0))
-            p_dAkk = tl.make_block_ptr(dAkk, (T, BT), (H * BT, 1), (i_ti, i_j * BC), (BC, BC), (1, 0))
-            b_kj = tl.load(p_k, boundary_check=(0, 1))
-            b_gk = tl.load(p_gk, boundary_check=(0, 1))
+            desc_k = make_tensor_descriptor(k, [T, K], [H * K, 1], [BC, BK])
+            desc_gk = make_tensor_descriptor(g, [T, K], [H * K, 1], [BC, BK])
+            desc_dAqk = make_tensor_descriptor(dAqk, [T, BT], [H * BT, 1], [BC, BC])
+            desc_dAkk = make_tensor_descriptor(dAkk, [T, BT], [H * BT, 1], [BC, BC])
+            b_kj = desc_k.load([i_t * BT + i_j * BC, i_k * BK])
+            b_gk = desc_gk.load([i_t * BT + i_j * BC, i_k * BK])
             b_kg = b_kj * exp2(b_gn - b_gk)
-            b_dAqk = tl.load(p_dAqk, boundary_check=(0, 1))
-            b_dAkk = tl.load(p_dAkk, boundary_check=(0, 1))
+            b_dAqk = desc_dAqk.load([i_ti, i_j * BC])
+            b_dAkk = desc_dAkk.load([i_ti, i_j * BC])
             b_dq2 += tl.dot(b_dAqk, b_kg)
             b_dk2 += tl.dot(b_dAkk, b_kg)
         b_gqn = exp2(b_g - b_gn)
@@ -521,10 +522,10 @@ def chunk_gdn2_bwd_kernel_intra(
     p_kj = k + i_ti * H * K + o_k
     p_gkj = g + i_ti * H * K + o_k
 
-    p_q = tl.make_block_ptr(q, (T, K), (H * K, 1), (i_ti, i_k * BK), (BC, BK), (1, 0))
-    p_k = tl.make_block_ptr(k, (T, K), (H * K, 1), (i_ti, i_k * BK), (BC, BK), (1, 0))
-    b_q = tl.load(p_q, boundary_check=(0, 1))
-    b_k = tl.load(p_k, boundary_check=(0, 1))
+    desc_q = make_tensor_descriptor(q, [T, K], [H * K, 1], [BC, BK])
+    desc_k = make_tensor_descriptor(k, [T, K], [H * K, 1], [BC, BK])
+    b_q = desc_q.load([i_ti, i_k * BK])
+    b_k = desc_k.load([i_ti, i_k * BK])
 
     if SAFE_GATE:
         if USE_GATHER:
@@ -533,10 +534,10 @@ def chunk_gdn2_bwd_kernel_intra(
             p_gn = g + (i_ti + min(BC // 2, T - i_ti - 1)) * H * K + o_k
             b_gn = tl.load(p_gn, mask=m_k, other=0)[None, :]
 
-        p_dAqk = tl.make_block_ptr(dAqk, (T, BT), (H * BT, 1), (i_ti, i_i * BC), (BC, BC), (1, 0))
-        p_dAkk = tl.make_block_ptr(dAkk, (T, BT), (H * BT, 1), (i_ti, i_i * BC), (BC, BC), (1, 0))
-        b_dAqk_diag_qk = tl.load(p_dAqk, boundary_check=(0, 1)).to(tl.float32)
-        b_dAkk_diag_qk = tl.load(p_dAkk, boundary_check=(0, 1)).to(tl.float32)
+        desc_dAqk = make_tensor_descriptor(dAqk, [T, BT], [H * BT, 1], [BC, BC])
+        desc_dAkk = make_tensor_descriptor(dAkk, [T, BT], [H * BT, 1], [BC, BC])
+        b_dAqk_diag_qk = desc_dAqk.load([i_ti, i_i * BC]).to(tl.float32)
+        b_dAkk_diag_qk = desc_dAkk.load([i_ti, i_i * BC]).to(tl.float32)
 
         m_i_diag_qk = (o_i[:, None] >= o_i[None, :]) & ((i_ti + o_i[:, None]) < T) & ((i_ti + o_i[None, :]) < T)
         m_j_diag_qk = (i_ti + o_i[:, None]) < T
@@ -569,14 +570,14 @@ def chunk_gdn2_bwd_kernel_intra(
     b_db_tile = b_dk2 * b_k
     b_dk2 = b_dk2 * b_b
 
-    p_dq = tl.make_block_ptr(dq, (T, K), (H * K, 1), (i_ti, i_k * BK), (BC, BK), (1, 0))
-    p_dq2 = tl.make_block_ptr(dq2, (T, K), (H * K, 1), (i_ti, i_k * BK), (BC, BK), (1, 0))
-    p_db = tl.make_block_ptr(db, (T, BK), (H * BK, 1), (i_ti, 0), (BC, BK), (1, 0))
+    desc_dq = make_tensor_descriptor(dq, [T, K], [H * K, 1], [BC, BK])
+    desc_dq2 = make_tensor_descriptor(dq2, [T, K], [H * K, 1], [BC, BK])
+    desc_db = make_tensor_descriptor(db, [T, BK], [H * BK, 1], [BC, BK])
 
     b_dg2 = b_q * b_dq2
-    b_dq2 = b_dq2 + tl.load(p_dq, boundary_check=(0, 1))
-    tl.store(p_dq2, b_dq2.to(p_dq2.dtype.element_ty), boundary_check=(0, 1))
-    tl.store(p_db, b_db_tile.to(p_db.dtype.element_ty), boundary_check=(0, 1))
+    b_dq2 = b_dq2 + desc_dq.load([i_ti, i_k * BK])
+    desc_dq2.store([i_ti, i_k * BK], b_dq2.to(desc_dq2.dtype))
+    desc_db.store([i_ti, 0], b_db_tile.to(desc_db.dtype))
 
     tl.debug_barrier()
     b_dkt = tl.zeros([BC, BK], dtype=tl.float32)
@@ -586,18 +587,18 @@ def chunk_gdn2_bwd_kernel_intra(
         p_gn = g + (min(i_ti + BC, T) - 1) * H * K + o_k
         b_gn = tl.load(p_gn, mask=m_k, other=0).to(tl.float32)[None, :]
         for i_j in range(i_i + 1, NC):
-            p_q = tl.make_block_ptr(q, (T, K), (H * K, 1), (i_t * BT + i_j * BC, i_k * BK), (BC, BK), (1, 0))
-            p_k = tl.make_block_ptr(k, (T, K), (H * K, 1), (i_t * BT + i_j * BC, i_k * BK), (BC, BK), (1, 0))
-            p_gk = tl.make_block_ptr(g, (T, K), (H * K, 1), (i_t * BT + i_j * BC, i_k * BK), (BC, BK), (1, 0))
-            p_bj = tl.make_block_ptr(b, (T, K), (H * K, 1), (i_t * BT + i_j * BC, i_k * BK), (BC, BK), (1, 0))
-            p_dAqk = tl.make_block_ptr(dAqk, (BT, T), (1, H * BT), (i_i * BC, i_t * BT + i_j * BC), (BC, BC), (0, 1))
-            p_dAkk = tl.make_block_ptr(dAkk, (BT, T), (1, H * BT), (i_i * BC, i_t * BT + i_j * BC), (BC, BC), (0, 1))
-            b_bj = tl.load(p_bj, boundary_check=(0, 1))
-            b_qj = tl.load(p_q, boundary_check=(0, 1))
-            b_kbj = tl.load(p_k, boundary_check=(0, 1)) * b_bj
-            b_gk = tl.load(p_gk, boundary_check=(0, 1)).to(tl.float32)
-            b_dAqk = tl.load(p_dAqk, boundary_check=(0, 1))
-            b_dAkk = tl.load(p_dAkk, boundary_check=(0, 1))
+            desc_q = make_tensor_descriptor(q, [T, K], [H * K, 1], [BC, BK])
+            desc_k = make_tensor_descriptor(k, [T, K], [H * K, 1], [BC, BK])
+            desc_gk = make_tensor_descriptor(g, [T, K], [H * K, 1], [BC, BK])
+            desc_bj = make_tensor_descriptor(b, [T, K], [H * K, 1], [BC, BK])
+            desc_dAqk = make_tensor_descriptor(dAqk, [T, BT], [H * BT, 1], [BC, BC])
+            desc_dAkk = make_tensor_descriptor(dAkk, [T, BT], [H * BT, 1], [BC, BC])
+            b_bj = desc_bj.load([i_t * BT + i_j * BC, i_k * BK])
+            b_qj = desc_q.load([i_t * BT + i_j * BC, i_k * BK])
+            b_kbj = desc_k.load([i_t * BT + i_j * BC, i_k * BK]) * b_bj
+            b_gk = desc_gk.load([i_t * BT + i_j * BC, i_k * BK]).to(tl.float32)
+            b_dAqk = tl.trans(desc_dAqk.load([i_t * BT + i_j * BC, i_i * BC]))
+            b_dAkk = tl.trans(desc_dAkk.load([i_t * BT + i_j * BC, i_i * BC]))
 
             o_j = i_t * BT + i_j * BC + o_i
             m_j = o_j < T
@@ -620,12 +621,12 @@ def chunk_gdn2_bwd_kernel_intra(
         else:
             p_gn = g + (i_ti + min(BC // 2, T - i_ti - 1)) * H * K + o_k
             b_gn = tl.load(p_gn, mask=m_k, other=0).to(tl.float32)[None, :]
-        p_q = tl.make_block_ptr(q, (T, K), (H * K, 1), (i_ti, i_k * BK), (BC, BK), (1, 0))
-        b_q = tl.load(p_q, boundary_check=(0, 1))
-        p_dAqk = tl.make_block_ptr(dAqk, (BT, T), (1, H * BT), (i_i * BC, i_ti), (BC, BC), (0, 1))
-        p_dAkk = tl.make_block_ptr(dAkk, (BT, T), (1, H * BT), (i_i * BC, i_ti), (BC, BC), (0, 1))
-        b_dAqk_diag_kk = tl.load(p_dAqk, boundary_check=(0, 1)).to(tl.float32)
-        b_dAkk_diag_kk = tl.load(p_dAkk, boundary_check=(0, 1)).to(tl.float32)
+        desc_q = make_tensor_descriptor(q, [T, K], [H * K, 1], [BC, BK])
+        b_q = desc_q.load([i_ti, i_k * BK])
+        desc_dAqk = make_tensor_descriptor(dAqk, [T, BT], [H * BT, 1], [BC, BC])
+        desc_dAkk = make_tensor_descriptor(dAkk, [T, BT], [H * BT, 1], [BC, BC])
+        b_dAqk_diag_kk = tl.trans(desc_dAqk.load([i_ti, i_i * BC])).to(tl.float32)
+        b_dAkk_diag_kk = tl.trans(desc_dAkk.load([i_ti, i_i * BC])).to(tl.float32)
 
         m_i_diag_kk = (o_i[:, None] <= o_i[None, :]) & ((i_ti + o_i[:, None]) < T) & ((i_ti + o_i[None, :]) < T)
         m_j_diag_kk = (i_ti + o_i[:, None]) < T
@@ -660,17 +661,17 @@ def chunk_gdn2_bwd_kernel_intra(
             p_gkj += H * K
             p_bj_ptr += H * K
 
-    p_dk = tl.make_block_ptr(dk, (T, K), (H * K, 1), (i_ti, i_k * BK), (BC, BK), (1, 0))
-    p_dk2 = tl.make_block_ptr(dk2, (T, K), (H * K, 1), (i_ti, i_k * BK), (BC, BK), (1, 0))
-    p_dg = tl.make_block_ptr(dg, (T, K), (H * K, 1), (i_ti, i_k * BK), (BC, BK), (1, 0))
-    p_dg2 = tl.make_block_ptr(dg2, (T, K), (H * K, 1), (i_ti, i_k * BK), (BC, BK), (1, 0))
+    desc_dk = make_tensor_descriptor(dk, [T, K], [H * K, 1], [BC, BK])
+    desc_dk2 = make_tensor_descriptor(dk2, [T, K], [H * K, 1], [BC, BK])
+    desc_dg = make_tensor_descriptor(dg, [T, K], [H * K, 1], [BC, BK])
+    desc_dg2 = make_tensor_descriptor(dg2, [T, K], [H * K, 1], [BC, BK])
 
-    b_dg2 += (b_dk2 - b_dkt) * b_k + tl.load(p_dg, boundary_check=(0, 1))
-    b_dk2 += tl.load(p_dk, boundary_check=(0, 1))
+    b_dg2 += (b_dk2 - b_dkt) * b_k + desc_dg.load([i_ti, i_k * BK])
+    b_dk2 += desc_dk.load([i_ti, i_k * BK])
     b_dk2 += b_dkt
 
-    tl.store(p_dk2, b_dk2.to(p_dk2.dtype.element_ty), boundary_check=(0, 1))
-    tl.store(p_dg2, b_dg2.to(p_dg2.dtype.element_ty), boundary_check=(0, 1))
+    desc_dk2.store([i_ti, i_k * BK], b_dk2.to(desc_dk2.dtype))
+    desc_dg2.store([i_ti, i_k * BK], b_dg2.to(desc_dg2.dtype))
 
 
 def chunk_gdn2_fwd_intra(

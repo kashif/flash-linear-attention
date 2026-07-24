@@ -10,6 +10,7 @@ import triton
 import triton.language as tl
 
 from fla.ops.utils import prepare_chunk_indices
+from fla.ops.utils.op import make_tensor_descriptor
 
 
 @triton.heuristics({
@@ -57,45 +58,41 @@ def parallel_path_fwd_kernel(
         i_n = i_b
         bos, eos = (i_n * T).to(tl.int64), (i_n * T + T).to(tl.int64)
 
-    p_q = tl.make_block_ptr(q + (bos * HQ + i_hq) * K, (T, K), (HQ*K, 1), (i_t * BT, 0), (BT, BK), (1, 0))
+    desc_q = make_tensor_descriptor(q + (bos * HQ + i_hq) * K, [T, K], [HQ*K, 1], [BT, BK])
     b_q = tl.zeros([BT, BK], dtype=tl.float32)
-    b_q += tl.load(p_q, boundary_check=(0, 1))
+    b_q += desc_q.load([i_t * BT, 0])
     sm_scale = scale * 1.44269504
     b_o = tl.zeros([BT, BV], dtype=tl.float32)
-    p_o = tl.make_block_ptr(o + (bos * HQ + i_hq) * V, (T, V), (HQ*V, 1), (i_t * BT, 0), (BT, BV), (1, 0))
-    b_o += tl.load(p_o, boundary_check=(0, 1))
+    desc_o = make_tensor_descriptor(o + (bos * HQ + i_hq) * V, [T, V], [HQ*V, 1], [BT, BV])
+    b_o += desc_o.load([i_t * BT, 0])
 
-    p_L = tl.make_block_ptr(L + bos * HQ + i_hq, (T, ), (HQ, ), (i_t * BT, ), (BT, ), (0,))
-    p_M = tl.make_block_ptr(M + bos * HQ + i_hq, (T, ), (HQ, ), (i_t * BT, ), (BT, ), (0,))
-    b_l = tl.load(p_L, boundary_check=(0,))
-    b_m = tl.load(p_M, boundary_check=(0,))
+    b_l = tl.load(L + bos * HQ + i_hq + (i_t * BT + tl.arange(0, BT)) * HQ, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0)
+    b_m = tl.load(M + bos * HQ + i_hq + (i_t * BT + tl.arange(0, BT)) * HQ, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0)
 
     if USE_GATE:
-        p_g_cumsum_q = tl.make_block_ptr(g_cumsum + bos * HQ + i_hq, (T, ), (HQ, ), (i_t * BT, ), (BT, ), (0,))
-        b_g_cumsum_q = tl.load(p_g_cumsum_q, boundary_check=(0,))
+        b_g_cumsum_q = tl.load(g_cumsum + bos * HQ + i_hq + (i_t * BT + tl.arange(0, BT)) * HQ, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0)
     else:
         b_g_cumsum_q = None
 
     for offset in range((i_t + 1) * BT - 2 * BS, i_t*BT-BS, -BS):
         p_k = tl.make_block_ptr(k + (bos * H + i_h) * K, (K, T), (1, K*H), (0, offset), (BK, BS), (0, 1))  # GQA when H!=HQ
         p_v = tl.make_block_ptr(v + (bos * H + i_h) * V, (T, V), (V*H, 1), (offset, 0), (BS, BV), (1, 0))  # GQA when H!=HQ
-        p_w1 = tl.make_block_ptr(w1 + (bos * H + i_h) * K, (K, T), (1, K*H), (0, offset), (BK, BS), (0, 1))
-        p_w2 = tl.make_block_ptr(w2 + (bos * H + i_h) * K, (T, K), (K*H, 1), (offset, 0), (BS, BK), (1, 0))
+        desc_w1 = make_tensor_descriptor(w1 + (bos * H + i_h) * K, [T, K], [K*H, 1], [BS, BK])
+        desc_w2 = make_tensor_descriptor(w2 + (bos * H + i_h) * K, [T, K], [K*H, 1], [BS, BK])
         # [BK, BS]
 
         b_k = tl.load(p_k, boundary_check=(0, 1))
         # [BS, BV]
         b_v = tl.load(p_v, boundary_check=(0, 1))
         # [BK, BK]
-        b_w1 = tl.load(p_w1, boundary_check=(0, 1))
-        b_w2 = tl.load(p_w2, boundary_check=(0, 1))
+        b_w1 = tl.trans(desc_w1.load([offset, 0]))
+        b_w2 = desc_w2.load([offset, 0])
         # [BT, BS]
         m_s = i_t * BT + tl.arange(0, BT) >= (offset + BS)
         b_s = tl.dot(b_q.to(b_k.dtype), b_k)
 
         if USE_GATE:
-            p_g_cumsum_k = tl.make_block_ptr(g_cumsum + (bos * HQ + i_hq), (T, ), (HQ, ), (offset, ), (BS, ), (0,))
-            b_g_cumsum_k = tl.load(p_g_cumsum_k, boundary_check=(0,))
+            b_g_cumsum_k = tl.load(g_cumsum + (bos * HQ + i_hq) + (offset + tl.arange(0, BS)) * HQ, mask=(offset + tl.arange(0, BS)) < T, other=0)
             b_s = b_s + b_g_cumsum_q[:, None] - b_g_cumsum_k[None, :]
         b_s = tl.where(m_s[:, None], b_s * sm_scale, float("-inf"))
         b_m_new = tl.maximum(b_m, tl.max(b_s, 1))
@@ -114,19 +111,18 @@ def parallel_path_fwd_kernel(
     for offset in range(i_t * BT - BS, -BS, -BS):
         p_k = tl.make_block_ptr(k + (bos * H + i_h) * K, (K, T), (1, K*H), (0, offset), (BK, BS), (0, 1))  # GQA when H!=HQ
         p_v = tl.make_block_ptr(v + (bos * H + i_h) * V, (T, V), (V*H, 1), (offset, 0), (BS, BV), (1, 0))  # GQA when H!=HQ
-        p_w1 = tl.make_block_ptr(w1 + (bos * H + i_h) * K, (K, T), (1, K*H), (0, offset), (BK, BS), (0, 1))
-        p_w2 = tl.make_block_ptr(w2 + (bos * H + i_h) * K, (T, K), (K*H, 1), (offset, 0), (BS, BK), (1, 0))
+        desc_w1 = make_tensor_descriptor(w1 + (bos * H + i_h) * K, [T, K], [K*H, 1], [BS, BK])
+        desc_w2 = make_tensor_descriptor(w2 + (bos * H + i_h) * K, [T, K], [K*H, 1], [BS, BK])
         # [BK, BS]
         b_k = tl.load(p_k, boundary_check=(0, 1))
         # [BS, BV]
         b_v = tl.load(p_v, boundary_check=(0, 1))
-        b_w1 = tl.load(p_w1, boundary_check=(0, 1))
-        b_w2 = tl.load(p_w2, boundary_check=(0, 1))
+        b_w1 = tl.trans(desc_w1.load([offset, 0]))
+        b_w2 = desc_w2.load([offset, 0])
         # [BT, BS]
         b_s = tl.dot(b_q.to(b_k.dtype), b_k)
         if USE_GATE:
-            p_g_cumsum_k = tl.make_block_ptr(g_cumsum + (bos * HQ + i_hq), (T, ), (HQ, ), (offset, ), (BS, ), (0,))
-            b_g_cumsum_k = tl.load(p_g_cumsum_k, boundary_check=(0,))
+            b_g_cumsum_k = tl.load(g_cumsum + (bos * HQ + i_hq) + (offset + tl.arange(0, BS)) * HQ, mask=(offset + tl.arange(0, BS)) < T, other=0)
             b_s = b_s + b_g_cumsum_q[:, None] - b_g_cumsum_k[None, :]
         b_s = b_s * sm_scale
         b_m_new = tl.maximum(b_m, tl.max(b_s, 1))
@@ -140,11 +136,10 @@ def parallel_path_fwd_kernel(
         b_q -= tl.dot(b_s2.to(b_w2.dtype), b_w2)
 
     b_o = b_o / b_l[:, None]
-    p_o_new = tl.make_block_ptr(o_new + (bos * HQ + i_hq) * V, (T, V), (HQ*V, 1), (i_t*BT, 0), (BT, BV), (1, 0))
-    tl.store(p_o_new, b_o.to(p_o_new.dtype.element_ty), boundary_check=(0, 1))
+    desc_o_new = make_tensor_descriptor(o_new + (bos * HQ + i_hq) * V, [T, V], [HQ*V, 1], [BT, BV])
+    desc_o_new.store([i_t*BT, 0], b_o.to(desc_o_new.dtype))
     b_l = tl.math.log2(b_l) + b_m
-    p_L_new = tl.make_block_ptr(L_new + (bos * HQ + i_hq), (T, ), (HQ, ), (i_t * BT, ), (BT, ), (0,))
-    tl.store(p_L_new, b_l.to(p_L_new.dtype.element_ty), boundary_check=(0,))
+    tl.store(L_new + (bos * HQ + i_hq) + (i_t * BT + tl.arange(0, BT)) * HQ, b_l.to((L_new + (bos * HQ + i_hq)).dtype.element_ty), mask=(i_t * BT + tl.arange(0, BT)) < T)
 
 
 def parallel_path_fwd_fn(

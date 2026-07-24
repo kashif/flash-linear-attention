@@ -12,6 +12,7 @@ import triton.language as tl
 
 from fla.modules.backends import dispatch
 from fla.ops.utils.cache import fla_cache_autotune
+from fla.ops.utils.op import make_tensor_descriptor
 from fla.utils import IS_AMD, autotune_cache_kwargs, input_guard
 
 BT_LIST = [8, 16, 32, 64, 128]
@@ -93,16 +94,16 @@ def l2norm_fwd_kernel(
     BT: tl.constexpr,
 ):
     i_t = tl.program_id(0)
-    p_x = tl.make_block_ptr(x, (T, D), (D, 1), (i_t * BT, 0), (BT, BD), (1, 0))
-    p_y = tl.make_block_ptr(y, (T, D), (D, 1), (i_t * BT, 0), (BT, BD), (1, 0))
-    p_rstd = tl.make_block_ptr(rstd, (T,), (1,), (i_t * BT,), (BT,), (0,))
+    desc_x = make_tensor_descriptor(x, [T, D], [D, 1], [BT, BD])
+    desc_y = make_tensor_descriptor(y, [T, D], [D, 1], [BT, BD])
+    desc_rstd = make_tensor_descriptor(rstd, [T], [1], [BT])
 
-    b_x = tl.load(p_x, boundary_check=(0, 1)).to(tl.float32)
+    b_x = desc_x.load([i_t * BT, 0]).to(tl.float32)
     b_rstd = 1 / tl.sqrt(tl.sum(b_x * b_x, 1) + eps)
     b_y = b_x * b_rstd[:, None]
 
-    tl.store(p_y, b_y.to(p_y.dtype.element_ty), boundary_check=(0, 1))
-    tl.store(p_rstd, b_rstd.to(p_rstd.dtype.element_ty), boundary_check=(0,))
+    desc_y.store([i_t * BT, 0], b_y.to(desc_y.dtype))
+    desc_rstd.store([i_t * BT], b_rstd.to(desc_rstd.dtype))
 
 
 @fla_cache_autotune(
@@ -124,16 +125,16 @@ def l2norm_bwd_kernel(
     BT: tl.constexpr,
 ):
     i_t = tl.program_id(0)
-    p_y = tl.make_block_ptr(y, (T, D), (D, 1), (i_t * BT, 0), (BT, BD), (1, 0))
-    p_rstd = tl.make_block_ptr(rstd, (T,), (1,), (i_t * BT,), (BT,), (0,))
-    p_dy = tl.make_block_ptr(dy, (T, D), (D, 1), (i_t * BT, 0), (BT, BD), (1, 0))
-    p_dx = tl.make_block_ptr(dx, (T, D), (D, 1), (i_t * BT, 0), (BT, BD), (1, 0))
+    desc_y = make_tensor_descriptor(y, [T, D], [D, 1], [BT, BD])
+    desc_rstd = make_tensor_descriptor(rstd, [T], [1], [BT])
+    desc_dy = make_tensor_descriptor(dy, [T, D], [D, 1], [BT, BD])
+    desc_dx = make_tensor_descriptor(dx, [T, D], [D, 1], [BT, BD])
 
-    b_y = tl.load(p_y, boundary_check=(0, 1)).to(tl.float32)
-    b_rstd = tl.load(p_rstd, boundary_check=(0,)).to(tl.float32)
-    b_dy = tl.load(p_dy, boundary_check=(0, 1)).to(tl.float32)
+    b_y = desc_y.load([i_t * BT, 0]).to(tl.float32)
+    b_rstd = desc_rstd.load([i_t * BT]).to(tl.float32)
+    b_dy = desc_dy.load([i_t * BT, 0]).to(tl.float32)
     b_dx = b_dy * b_rstd[:, None] - tl.sum(b_dy * b_y, 1)[:, None] * b_y * b_rstd[:, None]
-    tl.store(p_dx, b_dx.to(p_dx.dtype.element_ty), boundary_check=(0, 1))
+    desc_dx.store([i_t * BT, 0], b_dx.to(desc_dx.dtype))
 
 
 @dispatch('modules')

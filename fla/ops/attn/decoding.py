@@ -11,6 +11,7 @@ import triton.language as tl
 
 from fla.ops.utils.cumsum import chunk_global_cumsum
 from fla.ops.utils.op import exp
+from fla.ops.utils.op import make_tensor_descriptor
 from fla.utils import autotune_cache_kwargs, check_shared_mem
 
 
@@ -57,10 +58,10 @@ def naive_attn_decoding_kernel(
     bos, eos = tl.load(cu_seqlens + i_b).to(tl.int32), tl.load(cu_seqlens + i_b + 1).to(tl.int32)
     T = eos - bos
 
-    p_q = tl.make_block_ptr(q + i_bh * K, (K,), (1, ), (0, ), (BK,), (0,))
-    p_o = tl.make_block_ptr(o + i_bh * V, (V,), (1, ), (i_v * BV, ), (BV,), (0,))
+    desc_q = make_tensor_descriptor(q + i_bh * K, [K], [1], [BK])
+    desc_o = make_tensor_descriptor(o + i_bh * V, [V], [1], [BV])
 
-    b_q = tl.load(p_q, boundary_check=(0,))
+    b_q = desc_q.load([0])
     b_q = (b_q * scale).to(b_q.dtype)
 
     b_o = tl.zeros([BV], dtype=tl.float32)
@@ -69,8 +70,7 @@ def naive_attn_decoding_kernel(
     b_acc = tl.zeros([1], dtype=tl.float32)
 
     if USE_G:
-        p_g = tl.make_block_ptr(g_cumsum + bos * HQ + i_hq, (T,), (HQ,), (T-1,), (1,), (0,))
-        b_gq = tl.load(p_g, boundary_check=(0,)).to(tl.float32)
+        b_gq = tl.load(g_cumsum + bos * HQ + i_hq + (T-1 + tl.arange(0, 1)) * HQ, mask=(T-1 + tl.arange(0, 1)) < T, other=0).to(tl.float32)
     else:
         b_gq = None
 
@@ -80,12 +80,12 @@ def naive_attn_decoding_kernel(
         b_sink_bias = None
 
     for i_s in range(0, T, BS):
-        p_k = tl.make_block_ptr(k + (bos * H + i_h) * K, (T, K), (H*K, 1), (i_s, 0), (BS, BK), (1, 0))
-        p_v = tl.make_block_ptr(v + (bos * H + i_h) * V, (T, V), (H*V, 1), (i_s, i_v * BV), (BS, BV), (1, 0))
+        desc_k = make_tensor_descriptor(k + (bos * H + i_h) * K, [T, K], [H*K, 1], [BS, BK])
+        desc_v = make_tensor_descriptor(v + (bos * H + i_h) * V, [T, V], [H*V, 1], [BS, BV])
         # [BK, BS]
-        b_k = tl.load(p_k, boundary_check=(0, 1))
+        b_k = desc_k.load([i_s, 0])
         # [BS, BV]
-        b_v = tl.load(p_v, boundary_check=(0, 1))
+        b_v = desc_v.load([i_s, i_v * BV])
         # [BT, BS]
         b_s = tl.sum(b_q[None, :] * b_k, 1)
 
@@ -93,8 +93,7 @@ def naive_attn_decoding_kernel(
         b_s = tl.where(mask, b_s, float('-inf'))
 
         if USE_G:
-            p_gk = tl.make_block_ptr(g_cumsum + bos * HQ + i_hq, (T,), (HQ,), (i_s,), (BS,), (0,))
-            b_gk = tl.load(p_gk, boundary_check=(0,)).to(tl.float32)
+            b_gk = tl.load(g_cumsum + bos * HQ + i_hq + (i_s + tl.arange(0, BS)) * HQ, mask=(i_s + tl.arange(0, BS)) < T, other=0).to(tl.float32)
             b_s += b_gq - b_gk
         # [BT, BS]
         b_m, b_mp = tl.maximum(b_m, tl.max(b_s)), b_m
@@ -113,7 +112,7 @@ def naive_attn_decoding_kernel(
         b_m = tl.where(b_m == float('-inf'), 0., b_m)
         b_acc += exp(b_sink_bias - b_m)
     b_o = b_o / b_acc
-    tl.store(p_o, b_o.to(p_o.dtype.element_ty), boundary_check=(0, ))
+    desc_o.store([i_v * BV], b_o.to(desc_o.dtype))
 
 
 def attn_decoding_one_step(

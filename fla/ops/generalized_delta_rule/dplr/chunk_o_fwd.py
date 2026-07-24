@@ -10,6 +10,7 @@ import triton
 import triton.language as tl
 
 from fla.ops.utils import prepare_chunk_indices
+from fla.ops.utils.op import make_tensor_descriptor
 from fla.utils import IS_AMD, autotune_cache_kwargs, check_shared_mem
 
 NUM_WARPS_AUTOTUNE = [2, 4, 8, 16] if IS_AMD else [2, 4, 8, 16, 32]
@@ -67,27 +68,27 @@ def chunk_dplr_fwd_kernel_o(
 
     b_o = tl.zeros([BT, BV], dtype=tl.float32)
     for i_k in range(tl.cdiv(K, BK)):
-        p_qg = tl.make_block_ptr(qg + (bos * H + i_h) * K, (T, K), (H*K, 1), (i_t * BT, i_k * BK), (BT, BK), (1, 0))
-        p_h = tl.make_block_ptr(h + (i_tg * H + i_h) * K*V, (K, V), (V, 1), (i_k * BK, i_v * BV), (BK, BV), (1, 0))
-        b_qg = tl.load(p_qg, boundary_check=(0, 1))
-        b_h = tl.load(p_h, boundary_check=(0, 1))
+        desc_qg = make_tensor_descriptor(qg + (bos * H + i_h) * K, [T, K], [H*K, 1], [BT, BK])
+        desc_h = make_tensor_descriptor(h + (i_tg * H + i_h) * K*V, [K, V], [V, 1], [BK, BV])
+        b_qg = desc_qg.load([i_t * BT, i_k * BK])
+        b_h = desc_h.load([i_k * BK, i_v * BV])
         b_o += tl.dot(b_qg, b_h)
 
-    p_Aqk = tl.make_block_ptr(A_qk + (bos * H + i_h) * BT, (T, BT), (H*BT, 1), (i_t * BT, 0), (BT, BT), (1, 0))
-    p_Aqb = tl.make_block_ptr(A_qb + (bos * H + i_h) * BT, (T, BT), (H*BT, 1), (i_t * BT, 0), (BT, BT), (1, 0))
-    p_v = tl.make_block_ptr(v + (bos * H + i_h) * V, (T, V), (H*V, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
-    p_v_new = tl.make_block_ptr(v_new + (bos * H + i_h) * V, (T, V), (H*V, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
-    p_o = tl.make_block_ptr(o + (bos * H + i_h) * V, (T, V), (H*V, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0))
+    desc_Aqk = make_tensor_descriptor(A_qk + (bos * H + i_h) * BT, [T, BT], [H*BT, 1], [BT, BT])
+    desc_Aqb = make_tensor_descriptor(A_qb + (bos * H + i_h) * BT, [T, BT], [H*BT, 1], [BT, BT])
+    desc_v = make_tensor_descriptor(v + (bos * H + i_h) * V, [T, V], [H*V, 1], [BT, BV])
+    desc_v_new = make_tensor_descriptor(v_new + (bos * H + i_h) * V, [T, V], [H*V, 1], [BT, BV])
+    desc_o = make_tensor_descriptor(o + (bos * H + i_h) * V, [T, V], [H*V, 1], [BT, BV])
 
     m_s = tl.arange(0, BT)[:, None] >= tl.arange(0, BT)[None, :]
-    b_Aqk = tl.load(p_Aqk, boundary_check=(0, 1))
-    b_Aqb = tl.load(p_Aqb, boundary_check=(0, 1))
+    b_Aqk = desc_Aqk.load([i_t * BT, 0])
+    b_Aqb = desc_Aqb.load([i_t * BT, 0])
     b_Aqk = tl.where(m_s, b_Aqk, 0)
     b_Aqb = tl.where(m_s, b_Aqb, 0)
-    b_v = tl.load(p_v, boundary_check=(0, 1))
-    b_v_new = tl.load(p_v_new, boundary_check=(0, 1))
+    b_v = desc_v.load([i_t * BT, i_v * BV])
+    b_v_new = desc_v_new.load([i_t * BT, i_v * BV])
     b_o = b_o + tl.dot(b_Aqk.to(b_v.dtype), b_v) + tl.dot(b_Aqb.to(b_v_new.dtype), b_v_new)
-    tl.store(p_o, b_o.to(p_o.dtype.element_ty), boundary_check=(0, 1))
+    desc_o.store([i_t * BT, i_v * BV], b_o.to(desc_o.dtype))
 
 
 def chunk_dplr_fwd_o(

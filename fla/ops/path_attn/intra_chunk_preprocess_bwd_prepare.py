@@ -10,6 +10,7 @@ import triton
 import triton.language as tl
 
 from fla.ops.utils import prepare_chunk_indices, prepare_chunk_offsets
+from fla.ops.utils.op import make_tensor_descriptor
 
 
 @triton.heuristics({
@@ -88,17 +89,16 @@ def chunk_transform_qk_bwd_kernel_prepare(
     L += (bos*HQ + i_hq)
     D += (bos*HQ + i_hq)
 
-    p_q = tl.make_block_ptr(q, (T, K), (HQ*K, 1), (i_t * BT, 0), (BT, BK), (1, 0))
-    p_k = tl.make_block_ptr(k, (K, T), (1, H*K), (0, i_t * BT), (BK, BT), (0, 1))
-    p_w = tl.make_block_ptr(w, (T, K), (H*K, 1), (i_t * BT, 0), (BT, BK), (1, 0))
-    p_beta = tl.make_block_ptr(beta, (T, ), (H, ), (i_t * BT, ), (BT, ), (0, ))
+    desc_q = make_tensor_descriptor(q, [T, K], [HQ*K, 1], [BT, BK])
+    desc_k = make_tensor_descriptor(k, [T, K], [H*K, 1], [BT, BK])
+    desc_w = make_tensor_descriptor(w, [T, K], [H*K, 1], [BT, BK])
 
-    b_q = tl.load(p_q, boundary_check=(0, 1))
-    b_kt = tl.load(p_k, boundary_check=(0, 1))
-    b_w = tl.load(p_w, boundary_check=(0, 1))
-    b_beta = tl.load(p_beta, boundary_check=(0, ))
-    p_T = tl.make_block_ptr(AT, (T, BT), (BT*H, 1), (i_t * BT, 0), (BT, BT), (1, 0))
-    b_T = tl.load(p_T, boundary_check=(0, 1)) * b_beta[None, :]
+    b_q = desc_q.load([i_t * BT, 0])
+    b_kt = tl.trans(desc_k.load([i_t * BT, 0]))
+    b_w = desc_w.load([i_t * BT, 0])
+    b_beta = tl.load(beta + (i_t * BT + tl.arange(0, BT)) * H, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0)
+    desc_T = make_tensor_descriptor(AT, [T, BT], [BT*H, 1], [BT, BT])
+    b_T = desc_T.load([i_t * BT, 0]) * b_beta[None, :]
 
     o_i = tl.arange(0, BT)
     m_t = o_i[:, None] >= o_i[None, :]
@@ -108,46 +108,42 @@ def chunk_transform_qk_bwd_kernel_prepare(
     b_A = tl.where(m_t, tl.dot(b_q, b_kt) - tl.dot(b_qwT, b_wbk), 0)
 
     b_q = b_q.to(tl.float32) - tl.dot(b_qwT, b_w.to(b_qwT.dtype))
-    p_q_new = tl.make_block_ptr(q_new, (T, K), (K*HQ, 1), (i_t * BT, 0), (BT, K), (1, 0))
-    tl.store(p_q_new, b_q.to(p_q_new.dtype.element_ty), boundary_check=(0, 1))
+    desc_q_new = make_tensor_descriptor(q_new, [T, K], [K*HQ, 1], [BT, K])
+    desc_q_new.store([i_t * BT, 0], b_q.to(desc_q_new.dtype))
 
     if i_hq % G == 0:
         b_Twb = tl.dot(b_T, b_w)  # tf32
-        p_h = tl.make_block_ptr(h, (T, K), (K * H, 1), (i_t * BT, 0), (BT, BK), (1, 0))
-        tl.store(p_h, b_Twb.to(p_h.dtype.element_ty), boundary_check=(0, 1))
+        desc_h = make_tensor_descriptor(h, [T, K], [K * H, 1], [BT, BK])
+        desc_h.store([i_t * BT, 0], b_Twb.to(desc_h.dtype))
         b_T_wbk = tl.dot(b_T.to(b_wbk.dtype), b_wbk).to(b_kt.dtype)
-        p_k_new = tl.make_block_ptr(k_new, (K, T), (1, K*H), (0, i_t * BT), (BK, BT), (0, 1))
+        desc_k_new = make_tensor_descriptor(k_new, [T, K], [K*H, 1], [BT, BK])
         tl.store(p_k_new, (b_kt - tl.dot(tl.trans(b_w.to(b_kt.dtype)), b_T_wbk)
-                           ).to(p_k_new.dtype.element_ty), boundary_check=(0, 1))
+                           ).to(desc_k_new.dtype), boundary_check=(0, 1))
 
     if USE_GATE:
-        p_g_cumsum = tl.make_block_ptr(g_cumsum, (T, ), (HQ, ), (i_t * BT, ), (BT, ), (0, ))
-        b_g_cumsum = tl.load(p_g_cumsum, boundary_check=(0, ))
+        b_g_cumsum = tl.load(g_cumsum + (i_t * BT + tl.arange(0, BT)) * HQ, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0)
         b_A = b_A + (b_g_cumsum[:, None] - b_g_cumsum[None, :])
         b_A = tl.where((i_t * BT + tl.arange(0, BT) < T)[:, None], b_A, float("-inf"))  # avoid nan
 
-    p_l = tl.make_block_ptr(L, (T, ), (HQ, ), (i_t * BT, ), (BT, ), (0, ))
-    b_l = tl.load(p_l, boundary_check=(0, ))
-    p_delta = tl.make_block_ptr(D, (T, ), (HQ, ), (i_t * BT, ), (BT, ), (0, ))
-    delta = tl.load(p_delta, boundary_check=(0, ))
+    b_l = tl.load(L + (i_t * BT + tl.arange(0, BT)) * HQ, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0)
+    delta = tl.load(D + (i_t * BT + tl.arange(0, BT)) * HQ, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0)
 
     b_A_softmax = tl.exp2(tl.where(o_i[:, None] >= o_i[None, :], b_A * sm_scale - b_l[:, None], float("-inf")))
-    p_do = tl.make_block_ptr(do, (T, V), (HQ*V, 1), (i_t * BT, 0), (BT, BV), (1, 0))
-    b_do = tl.load(p_do, boundary_check=(0, 1))
+    desc_do = make_tensor_descriptor(do, [T, V], [HQ*V, 1], [BT, BV])
+    b_do = desc_do.load([i_t * BT, 0])
     b_dv = tl.dot(tl.trans(b_A_softmax.to(b_do.dtype)), b_do)
-    p_dv = tl.make_block_ptr(dv, (T, V), (HQ*V, 1), (i_t * BT, 0), (BT, BV), (1, 0))
-    tl.store(p_dv, b_dv.to(p_dv.dtype.element_ty), boundary_check=(0, 1))
+    desc_dv = make_tensor_descriptor(dv, [T, V], [HQ*V, 1], [BT, BV])
+    desc_dv.store([i_t * BT, 0], b_dv.to(desc_dv.dtype))
 
-    p_v = tl.make_block_ptr(v, (V, T), (1, H*V), (0, i_t * BT), (BV, BT), (0, 1))
-    b_v = tl.load(p_v, boundary_check=(0, 1))
+    desc_v = make_tensor_descriptor(v, [T, V], [H*V, 1], [BT, BV])
+    b_v = tl.trans(desc_v.load([i_t * BT, 0]))
     b_dp = tl.dot(b_do, b_v)
     b_dA = ((b_dp - delta[:, None]) * b_A_softmax * scale)
     if USE_GATE:
         b_dgq = tl.sum(b_dA, axis=1) - tl.sum(b_dA, axis=0)
-        p_dg = tl.make_block_ptr(dg_cumsum, (T, ), (HQ, ), (i_t * BT, ), (BT, ), (0, ))
-        tl.store(p_dg, b_dgq.to(p_dg.dtype.element_ty), boundary_check=(0,))
-    p_dA = tl.make_block_ptr(dA_local, (T, BT), (BT*HQ, 1), (i_t * BT, 0), (BT, BT), (1, 0))
-    tl.store(p_dA, b_dA.to(p_dA.dtype.element_ty), boundary_check=(0, 1))
+        tl.store(dg_cumsum + (i_t * BT + tl.arange(0, BT)) * HQ, b_dgq.to((dg_cumsum).dtype.element_ty), mask=(i_t * BT + tl.arange(0, BT)) < T)
+    desc_dA = make_tensor_descriptor(dA_local, [T, BT], [BT*HQ, 1], [BT, BT])
+    desc_dA.store([i_t * BT, 0], b_dA.to(desc_dA.dtype))
 
 
 def intra_chunk_preprocess_bwd_prepare_fn(q, k, v, w, beta, g_cumsum, A, L, D, do, scale, return_h=True, cu_seqlens=None,

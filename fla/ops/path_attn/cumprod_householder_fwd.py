@@ -10,6 +10,7 @@ import triton
 import triton.language as tl
 
 from fla.ops.utils import prepare_chunk_indices, prepare_chunk_offsets
+from fla.ops.utils.op import make_tensor_descriptor
 from fla.utils import check_shared_mem
 
 
@@ -68,22 +69,22 @@ def chunk_cumprod_householder_fwd_kernel(
 
     b_h = tl.zeros([BK, BK], dtype=tl.float32)
     for i_t_small in range(NT_small-1, -1, -1):
-        p_hc_suffix = tl.make_block_ptr(hc_suffix + i_t_small * stride_h, (K, K), (K, 1), (0, 0), (BK, BK), (1, 0))
-        tl.store(p_hc_suffix, b_h.to(hc_suffix.dtype.element_ty), boundary_check=(0, 1))
-        p_k = tl.make_block_ptr(k, (T, K), (H*K, 1), (i_s * S + i_t_small * BT, 0), (BT, BK), (1, 0))
-        b_k = tl.load(p_k, boundary_check=(0, 1))
+        desc_hc_suffix = make_tensor_descriptor(hc_suffix + i_t_small * stride_h, [K, K], [K, 1], [BK, BK])
+        desc_hc_suffix.store([0, 0], b_h.to(hc_suffix.dtype.element_ty))
+        desc_k = make_tensor_descriptor(k, [T, K], [H*K, 1], [BT, BK])
+        b_k = desc_k.load([i_s * S + i_t_small * BT, 0])
         b_k = (b_k - tl.dot(b_k, tl.trans(b_h.to(b_k.dtype))))
-        p_w1 = tl.make_block_ptr(w1, (K, T), (1, H*K), (0, i_s * S + i_t_small * BT), (BK, BT), (0, 1))
-        p_w2 = tl.make_block_ptr(w2, (T, K), (H*K, 1), (i_s * S + i_t_small * BT, 0), (BT, BK), (1, 0))
-        b_w1 = tl.load(p_w1, boundary_check=(0, 1))
-        b_w2 = tl.load(p_w2, boundary_check=(0, 1))
+        desc_w1 = make_tensor_descriptor(w1, [T, K], [H*K, 1], [BT, BK])
+        desc_w2 = make_tensor_descriptor(w2, [T, K], [H*K, 1], [BT, BK])
+        b_w1 = tl.trans(desc_w1.load([i_s * S + i_t_small * BT, 0]))
+        b_w2 = desc_w2.load([i_s * S + i_t_small * BT, 0])
         b_v_new = (b_w1 - tl.dot(b_h.to(b_w1.dtype), b_w1)).to(b_w2.dtype)
         b_h += tl.dot(b_v_new, b_w2)
-        p_k_new = tl.make_block_ptr(k_new, (T, K), (H*K, 1), (i_s * S + i_t_small * BT, 0), (BT, BK), (1, 0))
-        tl.store(p_k_new, b_k.to(k_new.dtype.element_ty), boundary_check=(0, 1))
+        desc_k_new = make_tensor_descriptor(k_new, [T, K], [H*K, 1], [BT, BK])
+        desc_k_new.store([i_s * S + i_t_small * BT, 0], b_k.to(k_new.dtype.element_ty))
 
-    p_hc_whole = tl.make_block_ptr(hc_whole, (K, K), (K, 1), (0, 0), (BK, BK), (1, 0))
-    tl.store(p_hc_whole, b_h.to(hc_whole.dtype.element_ty), boundary_check=(0, 1))
+    desc_hc_whole = make_tensor_descriptor(hc_whole, [K, K], [K, 1], [BK, BK])
+    desc_hc_whole.store([0, 0], b_h.to(hc_whole.dtype.element_ty))
 
 
 def chunk_cumprod_householder_fwd_fn(

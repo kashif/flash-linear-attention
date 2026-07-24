@@ -10,6 +10,7 @@ import triton
 import triton.language as tl
 
 from fla.ops.utils.op import exp
+from fla.ops.utils.op import make_tensor_descriptor
 from fla.utils import autocast_custom_bwd, autocast_custom_fwd, autotune_cache_kwargs, input_guard
 
 
@@ -334,19 +335,19 @@ def fused_recurrent_rwkv6_bwd_kernel_dw(
 
     i_t = 0 if not REVERSE else NT - 1
     for _ in range(NT):
-        p_q = tl.make_block_ptr(q + (bos*H + i_h) * K, (T, K), (H*K, 1), (i_t * BT + 1, i_k * BK), (BT, BK), (1, 0))
-        p_k = tl.make_block_ptr(k + (bos*H + i_h) * K, (T-1, K), (H*K, 1), (i_t * BT, i_k * BK), (BT, BK), (1, 0))
-        p_dq = tl.make_block_ptr(dq + (bos*H + i_h) * K, (T, K), (H*K, 1), (i_t * BT + 1, i_k * BK), (BT, BK), (1, 0))
-        p_dk = tl.make_block_ptr(dk + (bos*H + i_h) * K, (T-1, K), (H*K, 1), (i_t * BT, i_k * BK), (BT, BK), (1, 0))
-        p_dw = tl.make_block_ptr(dw + (bos*H + i_h) * K, (T, K), (H*K, 1), (i_t * BT, i_k * BK), (BT, BK), (1, 0))
+        desc_q = make_tensor_descriptor(q + (bos*H + i_h) * K, [T, K], [H*K, 1], [BT, BK])
+        desc_k = make_tensor_descriptor(k + (bos*H + i_h) * K, [T-1, K], [H*K, 1], [BT, BK])
+        desc_dq = make_tensor_descriptor(dq + (bos*H + i_h) * K, [T, K], [H*K, 1], [BT, BK])
+        desc_dk = make_tensor_descriptor(dk + (bos*H + i_h) * K, [T-1, K], [H*K, 1], [BT, BK])
+        desc_dw = make_tensor_descriptor(dw + (bos*H + i_h) * K, [T, K], [H*K, 1], [BT, BK])
         # [BT, BK]
-        b_q = tl.load(p_q, boundary_check=(0, 1)).to(tl.float32)
-        b_dq = tl.load(p_dq, boundary_check=(0, 1)).to(tl.float32)
-        b_k = tl.load(p_k, boundary_check=(0, 1)).to(tl.float32)
-        b_dk = tl.load(p_dk, boundary_check=(0, 1)).to(tl.float32)
+        b_q = desc_q.load([i_t * BT + 1, i_k * BK]).to(tl.float32)
+        b_dq = desc_dq.load([i_t * BT + 1, i_k * BK]).to(tl.float32)
+        b_k = desc_k.load([i_t * BT, i_k * BK]).to(tl.float32)
+        b_dk = desc_dk.load([i_t * BT, i_k * BK]).to(tl.float32)
         b_dw = (b_q * b_dq * scale) - b_k * b_dk
         b_c = b_z[None, :] + tl.dot(m_i, b_dw, allow_tf32=False)
-        tl.store(p_dw, b_c.to(p_dw.dtype.element_ty), boundary_check=(0, 1))
+        desc_dw.store([i_t * BT, i_k * BK], b_c.to(desc_dw.dtype))
         if i_t >= 0:
             b_z += tl.sum(b_dw, 0)
 

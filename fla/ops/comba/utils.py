@@ -10,6 +10,7 @@ import triton
 import triton.language as tl
 
 from fla.ops.utils.index import prepare_chunk_indices
+from fla.ops.utils.op import make_tensor_descriptor
 from fla.utils import autotune_cache_kwargs
 
 
@@ -49,17 +50,14 @@ def chunk_comba_cumsum_scalar_fwd_kernel(
     else:
         bos, eos = i_b * T, i_b * T + T
 
-    p_g = tl.make_block_ptr(g + bos*H + i_h, (T,), (H,), (i_t * BT,), (BT,), (0,))
-    p_g0 = tl.make_block_ptr(g0 + bos*H + i_h, (T,), (H,), (i_t * BT,), (BT,), (0,))
-    p_g1 = tl.make_block_ptr(g1 + bos*H + i_h, (T,), (H,), (i_t * BT,), (BT,), (0,))
     # [BT]
-    b_g = tl.load(p_g, boundary_check=(0,)).to(tl.float32)
+    b_g = tl.load(g + bos*H + i_h + (i_t * BT + tl.arange(0, BT)) * H, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0).to(tl.float32)
     if HAS_SCALE:
         b_g = b_g * scale
     b_g1 = tl.cumsum(b_g, axis=0)
     b_g0 = b_g1 - b_g
-    tl.store(p_g0, b_g0.to(p_g0.dtype.element_ty), boundary_check=(0,))
-    tl.store(p_g1, b_g1.to(p_g1.dtype.element_ty), boundary_check=(0,))
+    tl.store(g0 + bos*H + i_h + (i_t * BT + tl.arange(0, BT)) * H, b_g0.to((g0 + bos*H + i_h).dtype.element_ty), mask=(i_t * BT + tl.arange(0, BT)) < T)
+    tl.store(g1 + bos*H + i_h + (i_t * BT + tl.arange(0, BT)) * H, b_g1.to((g1 + bos*H + i_h).dtype.element_ty), mask=(i_t * BT + tl.arange(0, BT)) < T)
 
 
 def chunk_comba_cumsum_scalar_fwd(
@@ -125,8 +123,6 @@ def chunk_comba_cumsum_scalar_bwd_kernel(
     else:
         bos, eos = i_b * T, i_b * T + T
 
-    p_dg0 = tl.make_block_ptr(dg0 + bos*H + i_h, (T,), (H,), (i_t * BT,), (BT,), (0,))
-    p_dgr = tl.make_block_ptr(dgr + bos*H + i_h, (T,), (H,), (i_t * BT,), (BT,), (0,))
     # [BT]
     """
     b_dg:   1,2,3,4
@@ -135,11 +131,11 @@ def chunk_comba_cumsum_scalar_bwd_kernel(
     b_dz:   6
     b_dgr:  6,5,3,0
     """
-    b_dg0 = tl.load(p_dg0, boundary_check=(0,)).to(tl.float32)
+    b_dg0 = tl.load(dg0 + bos*H + i_h + (i_t * BT + tl.arange(0, BT)) * H, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0).to(tl.float32)
     b_temp = tl.cumsum(b_dg0, axis=0)
     b_dz = tl.sum(b_dg0, axis=0)
     b_dgr = -b_temp + b_dz[None]
-    tl.store(p_dgr, b_dgr.to(p_dgr.dtype.element_ty), boundary_check=(0,))
+    tl.store(dgr + bos*H + i_h + (i_t * BT + tl.arange(0, BT)) * H, b_dgr.to((dgr + bos*H + i_h).dtype.element_ty), mask=(i_t * BT + tl.arange(0, BT)) < T)
 
 
 def chunk_comba_cumsum_scalar_bwd(

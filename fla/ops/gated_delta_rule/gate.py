@@ -15,6 +15,7 @@ from fla.ops.utils.cache import fla_cache_autotune
 from fla.ops.utils.index import prepare_chunk_indices
 from fla.ops.utils.op import exp
 from fla.ops.utils.softplus import softplus
+from fla.ops.utils.op import make_tensor_descriptor
 from fla.utils import autocast_custom_bwd, autocast_custom_fwd, autotune_cache_kwargs, input_guard
 
 
@@ -86,10 +87,8 @@ def gdn_gate_chunk_cumsum_scalar_kernel(
     else:
         bos, eos = i_b * T, i_b * T + T
 
-    p_g = tl.make_block_ptr(g + bos * H + i_h, (T,), (H,), (i_t * BT,), (BT,), (0,))
-    p_o = tl.make_block_ptr(o + bos * H + i_h, (T,), (H,), (i_t * BT,), (BT,), (0,))
 
-    b_g = tl.load(p_g, boundary_check=(0,)).to(tl.float32)
+    b_g = tl.load(g + i_h + (i_t * BT + tl.arange(0, BT)) * H, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0).to(tl.float32)
     if HAS_BIAS:
         b_g = b_g + tl.load(dt_bias + i_h).to(tl.float32)
     b_A = tl.load(A_log + i_h).to(tl.float32)
@@ -101,7 +100,7 @@ def gdn_gate_chunk_cumsum_scalar_kernel(
         b_o = -b_o + b_z[None] + b_gate
     if HAS_SCALE:
         b_o *= scale
-    tl.store(p_o, b_o.to(p_o.dtype.element_ty), boundary_check=(0,))
+    tl.store(o + bos * H + i_h + (i_t * BT + tl.arange(0, BT)) * H, b_o.to((o + bos * H + i_h).dtype.element_ty), mask=(i_t * BT + tl.arange(0, BT)) < T)
 
 
 @triton.heuristics({
@@ -132,12 +131,9 @@ def gdn_gate_bwd_kernel(
 
     b_A = tl.load(A_log + i_h).to(tl.float32)
 
-    p_g = tl.make_block_ptr(g + i_h, (T,), (H,), (i_t * BT,), (BT,), (0,))
-    p_dg = tl.make_block_ptr(dg + i_h, (T,), (H,), (i_t * BT,), (BT,), (0,))
-    p_dyg = tl.make_block_ptr(dyg + i_h, (T,), (H,), (i_t * BT,), (BT,), (0,))
 
-    b_g = tl.load(p_g, boundary_check=(0,)).to(tl.float32)
-    b_dyg = tl.load(p_dyg, boundary_check=(0,)).to(tl.float32)
+    b_g = tl.load(g + i_h + (i_t * BT + tl.arange(0, BT)) * H, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0).to(tl.float32)
+    b_dyg = tl.load(dyg + i_h + (i_t * BT + tl.arange(0, BT)) * H, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0).to(tl.float32)
 
     if HAS_BIAS:
         b_g = b_g + tl.load(dt_bias + i_h).to(tl.float32)
@@ -150,7 +146,7 @@ def gdn_gate_bwd_kernel(
     b_dg = b_neg_expA * (b_dyg * tl.sigmoid(b_g))
     b_dA = tl.sum(b_dyg * b_yg, 0)
 
-    tl.store(p_dg, b_dg.to(p_dg.dtype.element_ty), boundary_check=(0,))
+    tl.store(dg + i_h + (i_t * BT + tl.arange(0, BT)) * H, b_dg.to((dg + i_h).dtype.element_ty), mask=(i_t * BT + tl.arange(0, BT)) < T)
     tl.store(dA + i_t * H + i_h, b_dA)
 
 
@@ -251,13 +247,11 @@ def gdn_gate_fwd_kernel(
 
     b_A = tl.load(A_log + i_h).to(tl.float32)
 
-    p_g = tl.make_block_ptr(g + i_h, (T,), (H,), (i_t * BT,), (BT,), (0,))
-    p_yg = tl.make_block_ptr(yg + i_h, (T,), (H,), (i_t * BT,), (BT,), (0,))
-    b_g = tl.load(p_g, boundary_check=(0,)).to(tl.float32)
+    b_g = tl.load(g + i_h + (i_t * BT + tl.arange(0, BT)) * H, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0).to(tl.float32)
     if HAS_BIAS:
         b_g = b_g + tl.load(dt_bias + i_h).to(tl.float32)
     b_yg = -exp(b_A) * softplus(b_g)
-    tl.store(p_yg, b_yg.to(p_yg.dtype.element_ty), boundary_check=(0,))
+    tl.store(yg + i_h + (i_t * BT + tl.arange(0, BT)) * H, b_yg.to((yg + i_h).dtype.element_ty), mask=(i_t * BT + tl.arange(0, BT)) < T)
 
 
 @dispatch('gated_delta_rule')

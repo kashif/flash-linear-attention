@@ -10,6 +10,7 @@ import triton
 import triton.language as tl
 
 from fla.ops.utils import prepare_chunk_indices
+from fla.ops.utils.op import make_tensor_descriptor
 from fla.utils import check_shared_mem
 
 
@@ -43,18 +44,17 @@ def intra_chunk_preprocess_bwd_kernel(
     b_dw = tl.zeros([BT, BK], dtype=tl.float32)
     b_dT = tl.zeros([BT, BT], dtype=tl.float32)
 
-    p_q = tl.make_block_ptr(q + (bos * HQ + i_hq) * K, (T, K), (K*HQ, 1), (i_t * BT, 0), (BT, BK), (1, 0))
-    p_k = tl.make_block_ptr(k + (bos * H + i_h) * K, (T, K), (K*H, 1), (i_t * BT, 0), (BT, BK), (1, 0))
-    p_w = tl.make_block_ptr(w + (bos * H + i_h) * K, (T, K), (K*H, 1), (i_t * BT, 0), (BT, BK), (1, 0))
-    p_w2 = tl.make_block_ptr(w2 + (bos * H + i_h) * K, (T, K), (K*H, 1), (i_t * BT, 0), (BT, BK), (1, 0))
-    p_beta = tl.make_block_ptr(beta + (bos * H + i_h), (T, ), (H, ), (i_t * BT, ), (BT, ), (0, ))
-    p_T = tl.make_block_ptr(AT + (bos * H + i_h) * BT, (T, BT), (BT*H, 1), (i_t * BT, 0), (BT, BT), (1, 0))
-    b_w = tl.load(p_w, boundary_check=(0, 1))
-    b_Twb = tl.load(p_w2, boundary_check=(0, 1))
-    b_beta = tl.load(p_beta, boundary_check=(0, ))
-    b_q = tl.load(p_q, boundary_check=(0, 1))
-    b_k = tl.load(p_k, boundary_check=(0, 1))
-    b_T = tl.load(p_T, boundary_check=(0, 1))
+    desc_q = make_tensor_descriptor(q + (bos * HQ + i_hq) * K, [T, K], [K*HQ, 1], [BT, BK])
+    desc_k = make_tensor_descriptor(k + (bos * H + i_h) * K, [T, K], [K*H, 1], [BT, BK])
+    desc_w = make_tensor_descriptor(w + (bos * H + i_h) * K, [T, K], [K*H, 1], [BT, BK])
+    desc_w2 = make_tensor_descriptor(w2 + (bos * H + i_h) * K, [T, K], [K*H, 1], [BT, BK])
+    desc_T = make_tensor_descriptor(AT + (bos * H + i_h) * BT, [T, BT], [BT*H, 1], [BT, BT])
+    b_w = desc_w.load([i_t * BT, 0])
+    b_Twb = desc_w2.load([i_t * BT, 0])
+    b_beta = tl.load(beta + (bos * H + i_h) + (i_t * BT + tl.arange(0, BT)) * H, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0)
+    b_q = desc_q.load([i_t * BT, 0])
+    b_k = desc_k.load([i_t * BT, 0])
+    b_T = desc_T.load([i_t * BT, 0])
     b_w_beta = (b_w * b_beta[:, None]).to(b_w.dtype)
 
     o_i = tl.arange(0, BT)
@@ -62,19 +62,19 @@ def intra_chunk_preprocess_bwd_kernel(
     b_wbk = tl.where(o_i[:, None] > o_i[None, :], tl.dot(b_w_beta, tl.trans(b_k)), 0).to(b_k.dtype)
     b_Twbk = tl.dot(b_T, b_wbk).to(b_w.dtype)
 
-    p_dA_local = tl.make_block_ptr(dA_local + (bos * HQ + i_hq) * BT, (T, BT), (BT*HQ, 1), (i_t * BT, 0), (BT, BT), (1, 0))
-    b_dA_local = tl.load(p_dA_local, boundary_check=(0, 1))
+    desc_dA_local = make_tensor_descriptor(dA_local + (bos * HQ + i_hq) * BT, [T, BT], [BT*HQ, 1], [BT, BT])
+    b_dA_local = desc_dA_local.load([i_t * BT, 0])
 
     # # Twb part qw part.
-    p_dq = tl.make_block_ptr(dq + (bos * HQ + i_hq) * K, (T, K), (K*HQ, 1), (i_t * BT, 0), (BT, BK), (1, 0))
-    b_dq = tl.load(p_dq, boundary_check=(0, 1))
+    desc_dq = make_tensor_descriptor(dq + (bos * HQ + i_hq) * K, [T, K], [K*HQ, 1], [BT, BK])
+    b_dq = desc_dq.load([i_t * BT, 0])
 
-    p_dw1 = tl.make_block_ptr(dw1 + (bos * HQ + i_hq) * K, (T, K), (K*HQ, 1), (i_t * BT, 0), (BT, BK), (1, 0))
-    b_dw += tl.load(p_dw1, boundary_check=(0, 1))
+    desc_dw1 = make_tensor_descriptor(dw1 + (bos * HQ + i_hq) * K, [T, K], [K*HQ, 1], [BT, BK])
+    b_dw += desc_dw1.load([i_t * BT, 0])
 
     b_dqw = -tl.dot(b_dA_local, tl.trans(b_Twbk)) - tl.dot(b_dq.to(b_Twb.dtype), tl.trans(b_Twb))
-    p_dw2 = tl.make_block_ptr(dw2 + (bos * HQ + i_hq) * K, (T, K), (K*HQ, 1), (i_t * BT, 0), (BT, BK), (1, 0))
-    b_dTwb = -tl.dot(tl.trans(b_qw), b_dq) + tl.load(p_dw2, boundary_check=(0, 1))
+    desc_dw2 = make_tensor_descriptor(dw2 + (bos * HQ + i_hq) * K, [T, K], [K*HQ, 1], [BT, BK])
+    b_dTwb = -tl.dot(tl.trans(b_qw), b_dq) + desc_dw2.load([i_t * BT, 0])
     b_dT += tl.dot(b_dTwb.to(b_w_beta.dtype), tl.trans(b_w_beta))
     b_dw_beta += tl.dot(tl.trans(b_T), b_dTwb.to(b_T.dtype))
 
@@ -82,12 +82,12 @@ def intra_chunk_preprocess_bwd_kernel(
     b_dq += tl.dot(b_dA_local.to(b_k.dtype), b_k)
     b_dq += tl.dot(b_dqw.to(b_w.dtype), b_w)
     b_dw += tl.dot(tl.trans(b_dqw.to(b_q.dtype)), b_q)
-    p_q_new = tl.make_block_ptr(dq_new + (bos * HQ + i_hq) * K, (T, K), (K*HQ, 1), (i_t * BT, 0), (BT, BK), (1, 0))
-    tl.store(p_q_new, b_dq.to(dq_new.dtype.element_ty), boundary_check=(0, 1))
+    desc_q_new = make_tensor_descriptor(dq_new + (bos * HQ + i_hq) * K, [T, K], [K*HQ, 1], [BT, BK])
+    desc_q_new.store([i_t * BT, 0], b_dq.to(dq_new.dtype.element_ty))
 
     # Twbk part
-    p_dk = tl.make_block_ptr(dk + (bos * HQ + i_hq) * K, (T, K), (K*HQ, 1), (i_t * BT, 0), (BT, BK), (1, 0))
-    b_dk = tl.load(p_dk, boundary_check=(0, 1))
+    desc_dk = make_tensor_descriptor(dk + (bos * HQ + i_hq) * K, [T, K], [K*HQ, 1], [BT, BK])
+    b_dk = desc_dk.load([i_t * BT, 0])
     b_dTwbk = -tl.dot(tl.trans(b_qw), b_dA_local.to(b_qw.dtype)) - tl.dot(b_w, tl.trans(b_dk.to(b_w.dtype)))
     b_dw -= tl.dot(b_Twbk, b_dk.to(b_w.dtype))
     b_dT += tl.dot(b_dTwbk.to(b_wbk.dtype), tl.trans(b_wbk))
@@ -96,12 +96,12 @@ def intra_chunk_preprocess_bwd_kernel(
 
     b_dk += tl.dot(tl.trans(b_dwbk), b_w_beta)
     b_dk += tl.dot(tl.trans(b_dA_local), b_q)
-    p_dk_new = tl.make_block_ptr(dk_new + (bos * HQ + i_hq) * K, (T, K), (K*HQ, 1), (i_t * BT, 0), (BT, BK), (1, 0))
-    tl.store(p_dk_new, b_dk.to(dk_new.dtype.element_ty), boundary_check=(0, 1))
+    desc_dk_new = make_tensor_descriptor(dk_new + (bos * HQ + i_hq) * K, [T, K], [K*HQ, 1], [BT, BK])
+    desc_dk_new.store([i_t * BT, 0], b_dk.to(dk_new.dtype.element_ty))
 
     # matrix inverse's gradient
-    p_T = tl.make_block_ptr(AT + (bos * H + i_h) * BT, (BT, T), (1, BT*H), (0, i_t * BT), (BT, BT), (0, 1))
-    b_Tt = tl.load(p_T, boundary_check=(0, 1))
+    desc_T = make_tensor_descriptor(AT + (bos * H + i_h) * BT, [T, BT], [BT*H, 1], [BT, BT])
+    b_Tt = tl.trans(desc_T.load([i_t * BT, 0]))
     b_dT = tl.where(tl.arange(0, BT)[:, None] > tl.arange(0, BT)[None, :], b_dT, 0).to(b_w.dtype)
     b_dT = tl.dot(b_Tt, b_dT).to(b_w.dtype)
     b_dT = tl.dot(b_dT, b_Tt)
@@ -112,10 +112,9 @@ def intra_chunk_preprocess_bwd_kernel(
     b_dw += b_dw_beta * b_beta[:, None]
     b_dbeta = tl.sum(b_dw_beta * b_w, axis=1)
 
-    p_dw = tl.make_block_ptr(dw + (bos * HQ + i_hq) * K, (T, K), (K*HQ, 1), (i_t * BT, 0), (BT, BK), (1, 0))
-    tl.store(p_dw, b_dw.to(dw.dtype.element_ty), boundary_check=(0, 1))
-    p_dbeta = tl.make_block_ptr(dbeta + (bos * HQ + i_hq), (T, ), (HQ, ), (i_t * BT, ), (BT, ), (0, ))
-    tl.store(p_dbeta, b_dbeta.to(dbeta.dtype.element_ty), boundary_check=(0, ))
+    desc_dw = make_tensor_descriptor(dw + (bos * HQ + i_hq) * K, [T, K], [K*HQ, 1], [BT, BK])
+    desc_dw.store([i_t * BT, 0], b_dw.to(dw.dtype.element_ty))
+    tl.store(dbeta + (bos * HQ + i_hq) + (i_t * BT + tl.arange(0, BT)) * HQ, b_dbeta.to(dbeta.dtype.element_ty), mask=(i_t * BT + tl.arange(0, BT)) < T)
 
 
 def intra_chunk_preprocess_bwd_fn(q, k, w, w2, beta,

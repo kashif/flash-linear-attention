@@ -11,6 +11,7 @@ import triton.language as tl
 from einops import rearrange
 
 from fla.ops.utils.cache import fla_cache_autotune
+from fla.ops.utils.op import make_tensor_descriptor
 from fla.utils import IS_AMD, autotune_cache_kwargs, input_guard
 
 NUM_WARPS_AUTOTUNE = [2, 4, 8, 16] if IS_AMD else [4, 8, 16, 32]
@@ -84,19 +85,19 @@ def causal_conv1d_fwd_kernel(
 
     b_y = tl.zeros((BT, BD), dtype=tl.float32)
     if not USE_INITIAL_STATE:
+        desc_x = make_tensor_descriptor(p_x, [T, D], [stride_x_t, stride_x_d], [BT, BD])
         for i_w in tl.static_range(-W + 1, 1):
-            p_yi = tl.make_block_ptr(p_x, (T, D), (stride_x_t, stride_x_d), (i_t * BT + i_w, i_d * BD), (BT, BD), (1, 0))
             # [BT, BD]
-            b_yi = tl.load(p_yi, boundary_check=(0, 1)).to(tl.float32)
+            b_yi = desc_x.load([i_t * BT + i_w, i_d * BD]).to(tl.float32)
             if HAS_WEIGHT:
                 b_yi *= tl.sum(b_w * (o_w == (i_w + W - 1)), 1)
             b_y += b_yi
     elif i_t * BT >= W:
         # to make Triton compiler happy, we need to copy codes
+        desc_x = make_tensor_descriptor(p_x, [T, D], [stride_x_t, stride_x_d], [BT, BD])
         for i_w in tl.static_range(-W + 1, 1):
-            p_yi = tl.make_block_ptr(p_x, (T, D), (stride_x_t, stride_x_d), (i_t * BT + i_w, i_d * BD), (BT, BD), (1, 0))
             # [BT, BD]
-            b_yi = tl.load(p_yi, boundary_check=(0, 1)).to(tl.float32)
+            b_yi = desc_x.load([i_t * BT + i_w, i_d * BD]).to(tl.float32)
             if HAS_WEIGHT:
                 b_yi *= tl.sum(b_w * (o_w == (i_w + W - 1)), 1)
             b_y += b_yi
@@ -126,12 +127,11 @@ def causal_conv1d_fwd_kernel(
         b_y = b_y * tl.sigmoid(b_y)
 
     if HAS_RESIDUAL:
-        p_residual = tl.make_block_ptr(residual + bos * D, (T, D), (D, 1), (i_t * BT, i_d * BD), (BT, BD), (1, 0))
-        b_residual = tl.load(p_residual, boundary_check=(0, 1))
-        b_y += b_residual
+        desc_residual = make_tensor_descriptor(residual + bos * D, [T, D], [D, 1], [BT, BD])
+        b_y += desc_residual.load([i_t * BT, i_d * BD])
 
-    p_y = tl.make_block_ptr(y + bos * D, (T, D), (D, 1), (i_t * BT, i_d * BD), (BT, BD), (1, 0))
-    tl.store(p_y, tl.cast(b_y, dtype=p_y.dtype.element_ty, fp_downcast_rounding='rtne'), boundary_check=(0, 1))
+    desc_y = make_tensor_descriptor(y + bos * D, [T, D], [D, 1], [BT, BD])
+    desc_y.store([i_t * BT, i_d * BD], tl.cast(b_y, dtype=desc_y.dtype, fp_downcast_rounding='rtne'))
 
 
 @triton.heuristics({
@@ -211,8 +211,8 @@ def causal_conv1d_bwd_kernel(
     m_w = o_w >= 0
 
     if HAS_WEIGHT:
-        p_x = tl.make_block_ptr(p_x, (T, D), (stride_x_t, stride_x_d), (i_t * BT, i_d * BD), (BT, BD), (1, 0))
-        b_x = tl.load(p_x, boundary_check=(0, 1))
+        desc_x = make_tensor_descriptor(p_x, [T, D], [stride_x_t, stride_x_d], [BT, BD])
+        b_x = desc_x.load([i_t * BT, i_d * BD])
         # [BD, BW]
         b_w = tl.load(weight + o_d[:, None] * W + o_w, mask=m_d[:, None] & m_w, other=0)
 
@@ -220,15 +220,16 @@ def causal_conv1d_bwd_kernel(
     if HAS_BIAS:
         b_db = tl.zeros((BD,), dtype=tl.float32)
 
+    desc_dy = make_tensor_descriptor(p_dy, [T, D], [stride_dy_t, stride_dy_d], [BT, BD])
+    if ACTIVATION == 'swish' or ACTIVATION == 'silu':
+        desc_y = make_tensor_descriptor(y + bos * D, [T, D], [D, 1], [BT, BD])
+
     if not USE_FINAL_STATE and not USE_INITIAL_STATE:
         for i_w in tl.static_range(0, W):
-            p_dy_blk = tl.make_block_ptr(p_dy, (T, D), (stride_dy_t, stride_dy_d),
-                                         (i_t * BT + i_w, i_d * BD), (BT, BD), (1, 0))
             # [BT, BD]
-            b_dy = tl.load(p_dy_blk, boundary_check=(0, 1)).to(tl.float32)
+            b_dy = desc_dy.load([i_t * BT + i_w, i_d * BD]).to(tl.float32)
             if ACTIVATION == 'swish' or ACTIVATION == 'silu':
-                p_y = tl.make_block_ptr(y + bos * D, (T, D), (D, 1), (i_t * BT + i_w, i_d * BD), (BT, BD), (1, 0))
-                b_y = tl.load(p_y, boundary_check=(0, 1)).to(tl.float32)
+                b_y = desc_y.load([i_t * BT + i_w, i_d * BD]).to(tl.float32)
                 b_ys = tl.sigmoid(b_y)
                 b_dy = b_dy * b_ys * (1 + b_y * (1 - b_ys))
             b_wdy = b_dy
@@ -244,13 +245,10 @@ def causal_conv1d_bwd_kernel(
     elif i_t * BT >= W:
         # to make Triton compiler happy, we need to copy codes
         for i_w in tl.static_range(0, W):
-            p_dy_blk = tl.make_block_ptr(p_dy, (T, D), (stride_dy_t, stride_dy_d),
-                                         (i_t * BT + i_w, i_d * BD), (BT, BD), (1, 0))
             # [BT, BD]
-            b_dy = tl.load(p_dy_blk, boundary_check=(0, 1)).to(tl.float32)
+            b_dy = desc_dy.load([i_t * BT + i_w, i_d * BD]).to(tl.float32)
             if ACTIVATION == 'swish' or ACTIVATION == 'silu':
-                p_y = tl.make_block_ptr(y + bos * D, (T, D), (D, 1), (i_t * BT + i_w, i_d * BD), (BT, BD), (1, 0))
-                b_y = tl.load(p_y, boundary_check=(0, 1)).to(tl.float32)
+                b_y = desc_y.load([i_t * BT + i_w, i_d * BD]).to(tl.float32)
                 b_ys = tl.sigmoid(b_y)
                 b_dy = b_dy * b_ys * (1 + b_y * (1 - b_ys))
             b_wdy = b_dy
@@ -267,12 +265,9 @@ def causal_conv1d_bwd_kernel(
         # which may use initial state
         o_t = i_t * BT + tl.arange(0, BT)
         for i_w in tl.static_range(0, W):
-            p_dy_blk = tl.make_block_ptr(p_dy, (T, D), (stride_dy_t, stride_dy_d),
-                                         (i_t * BT + i_w, i_d * BD), (BT, BD), (1, 0))
-            b_dy_shift = tl.load(p_dy_blk, boundary_check=(0, 1)).to(tl.float32)
+            b_dy_shift = desc_dy.load([i_t * BT + i_w, i_d * BD]).to(tl.float32)
             if ACTIVATION == 'swish' or ACTIVATION == 'silu':
-                p_y = tl.make_block_ptr(y + bos * D, (T, D), (D, 1), (i_t * BT + i_w, i_d * BD), (BT, BD), (1, 0))
-                b_y_shift = tl.load(p_y, boundary_check=(0, 1)).to(tl.float32)
+                b_y_shift = desc_y.load([i_t * BT + i_w, i_d * BD]).to(tl.float32)
                 b_ys = tl.sigmoid(b_y_shift)
                 b_dy_shift = b_dy_shift * b_ys * (1 + b_y_shift * (1 - b_ys))
             if HAS_WEIGHT:
@@ -324,8 +319,8 @@ def causal_conv1d_bwd_kernel(
     else:
         p_dx = dx + tl.cast(i_b, tl.int64) * stride_dx_n
 
-    p_dx = tl.make_block_ptr(p_dx, (T, D), (stride_dx_t, stride_dx_d), (i_t * BT, i_d * BD), (BT, BD), (1, 0))
-    tl.store(p_dx, tl.cast(b_dx, dtype=p_dx.dtype.element_ty, fp_downcast_rounding='rtne'), boundary_check=(0, 1))
+    desc_dx = make_tensor_descriptor(p_dx, [T, D], [stride_dx_t, stride_dx_d], [BT, BD])
+    desc_dx.store([i_t * BT, i_d * BD], tl.cast(b_dx, dtype=desc_dx.dtype, fp_downcast_rounding='rtne'))
 
 
 @triton.heuristics({
@@ -380,15 +375,8 @@ def causal_conv1d_update_kernel(
 
     if USE_INITIAL_STATE:
         # 2. Shift Cache (Read [1:])
-        p_cache_read = tl.make_block_ptr(
-            cache + i_n * D*W,
-            shape=(D, W),
-            strides=(W, 1),
-            offsets=(i_d * BD, 1),
-            block_shape=(BD, BW),
-            order=(1, 0)
-        )
-        b_cache = tl.load(p_cache_read, boundary_check=(0, 1)).to(tl.float32)
+        desc_cache = make_tensor_descriptor(cache + i_n * D*W, [D, W], [W, 1], [BD, BW])
+        b_cache = desc_cache.load([i_d * BD, 1]).to(tl.float32)
 
         # 3. Fill x to the last position
         m_update = o_w == (W - 1)
@@ -413,16 +401,8 @@ def causal_conv1d_update_kernel(
              dtype=y.dtype.element_ty, fp_downcast_rounding='rtne'), mask=m_d)
 
     if USE_INITIAL_STATE:
-        p_cache_write = tl.make_block_ptr(
-            cache + i_n * D*W,
-            shape=(D, W),
-            strides=(W, 1),
-            offsets=(i_d * BD, 0),
-            block_shape=(BD, BW),
-            order=(1, 0)
-        )
-        tl.store(p_cache_write, tl.cast(b_cache, dtype=cache.dtype.element_ty,
-                 fp_downcast_rounding='rtne'), boundary_check=(0, 1))
+        desc_cache.store([i_d * BD, 0], tl.cast(b_cache, dtype=desc_cache.dtype,
+                         fp_downcast_rounding='rtne'))
 
 
 @triton.heuristics({
@@ -538,10 +518,10 @@ def causal_conv1d_states_fwd_kernel(
         seq_len = T
         p_x = x + tl.cast(i_n, tl.int64) * stride_x_n
 
-    p_x = tl.make_block_ptr(p_x, (seq_len, D), (stride_x_t, stride_x_d), (seq_len - BW, i_d * BD), (BW, BD), (1, 0))
+    desc_x = make_tensor_descriptor(p_x, [seq_len, D], [stride_x_t, stride_x_d], [BW, BD])
 
     # b_x Shape: [BW, BD]
-    b_x = tl.load(p_x, boundary_check=(0, 1), padding_option="zero").to(tl.float32)
+    b_x = desc_x.load([seq_len - BW, i_d * BD]).to(tl.float32)
 
     if USE_INITIAL_STATE:
         if seq_len < BW:

@@ -17,6 +17,7 @@ from fla.ops.utils.cache import fla_cache_autotune
 from fla.ops.utils.index import prepare_chunk_indices
 from fla.ops.utils.op import exp
 from fla.ops.utils.softplus import softplus
+from fla.ops.utils.op import make_tensor_descriptor
 from fla.utils import IS_AMD, autocast_custom_bwd, autocast_custom_fwd, autotune_cache_kwargs, check_shared_mem, input_guard
 
 BS_LIST = [32, 64] if check_shared_mem() else [16, 32]
@@ -107,24 +108,23 @@ def kda_gate_fwd_kernel(
 
     b_A = tl.load(A_log + i_h).to(tl.float32)
 
-    p_g = tl.make_block_ptr(g + i_h * D, (T, D), (H * D, 1), (i_t * BT, 0), (BT, BD), (1, 0))
-    p_yg = tl.make_block_ptr(yg + i_h * D, (T, D), (H * D, 1), (i_t * BT, 0), (BT, BD), (1, 0))
+    desc_g = make_tensor_descriptor(g + i_h * D, [T, D], [H * D, 1], [BT, BD])
+    desc_yg = make_tensor_descriptor(yg + i_h * D, [T, D], [H * D, 1], [BT, BD])
     # [BT, BD]
-    b_g = tl.load(p_g, boundary_check=(0, 1)).to(tl.float32)
+    b_g = desc_g.load([i_t * BT, 0]).to(tl.float32)
     if HAS_BIAS:
-        p_b = tl.make_block_ptr(dt_bias, (H * D,), (1,), (i_h * D,), (BD,), (0,))
-        b_g = b_g + tl.load(p_b, boundary_check=(0,)).to(tl.float32)
+        desc_b = make_tensor_descriptor(dt_bias, [H * D], [1], [BD])
+        b_g = b_g + desc_b.load([i_h * D]).to(tl.float32)
     if not USE_LOWER_BOUND:
         b_yg = -exp(b_A) * softplus(b_g)
     else:
         b_yg = lower_bound * tl.sigmoid(exp(b_A) * b_g)
-    tl.store(p_yg, b_yg.to(p_yg.dtype.element_ty), boundary_check=(0, 1))
+    desc_yg.store([i_t * BT, 0], b_yg.to(desc_yg.dtype))
 
     if HAS_BETA:
-        p_b = tl.make_block_ptr(beta + i_h, (T,), (H,), (i_t * BT,), (BT,), (0,))
-        p_yb = tl.make_block_ptr(yb + i_h, (T,), (H,), (i_t * BT,), (BT,), (0,))
-        b_yb = tl.sigmoid(tl.load(p_b, boundary_check=(0,)).to(tl.float32))
-        tl.store(p_yb, b_yb.to(p_yb.dtype.element_ty), boundary_check=(0,))
+        pass
+        b_yb = tl.sigmoid(tl.load(beta + i_h + (i_t * BT + tl.arange(0, BT)) * H, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0).to(tl.float32))
+        tl.store(yb + i_h + (i_t * BT + tl.arange(0, BT)) * H, b_yb.to((yb + i_h).dtype.element_ty), mask=(i_t * BT + tl.arange(0, BT)) < T)
 
 
 @triton.heuristics({
@@ -166,17 +166,17 @@ def kda_gate_bwd_kernel(
 
     b_A = tl.load(A_log + i_h).to(tl.float32)
 
-    p_g = tl.make_block_ptr(g + i_h * D, (T, D), (H * D, 1), (i_t * BT, 0), (BT, BD), (1, 0))
-    p_dg = tl.make_block_ptr(dg + i_h * D, (T, D), (H * D, 1), (i_t * BT, 0), (BT, BD), (1, 0))
-    p_dyg = tl.make_block_ptr(dyg + i_h * D, (T, D), (H * D, 1), (i_t * BT, 0), (BT, BD), (1, 0))
+    desc_g = make_tensor_descriptor(g + i_h * D, [T, D], [H * D, 1], [BT, BD])
+    desc_dg = make_tensor_descriptor(dg + i_h * D, [T, D], [H * D, 1], [BT, BD])
+    desc_dyg = make_tensor_descriptor(dyg + i_h * D, [T, D], [H * D, 1], [BT, BD])
 
     # [BT, BD]
-    b_g = tl.load(p_g, boundary_check=(0, 1)).to(tl.float32)
-    b_dyg = tl.load(p_dyg, boundary_check=(0, 1)).to(tl.float32)
+    b_g = desc_g.load([i_t * BT, 0]).to(tl.float32)
+    b_dyg = desc_dyg.load([i_t * BT, 0]).to(tl.float32)
 
     if HAS_BIAS:
-        p_b = tl.make_block_ptr(dt_bias, (H * D,), (1,), (i_h * D,), (BD,), (0,))
-        b_g = b_g + tl.load(p_b, boundary_check=(0,)).to(tl.float32)
+        desc_b = make_tensor_descriptor(dt_bias, [H * D], [1], [BD])
+        b_g = b_g + desc_b.load([i_h * D]).to(tl.float32)
 
     # [BT, BD]
     if not USE_LOWER_BOUND:
@@ -195,17 +195,15 @@ def kda_gate_bwd_kernel(
         b_dg = b_d_inner_term * b_A
         b_dA = tl.sum(tl.sum(b_dg * b_g, 1), 0)
 
-    tl.store(p_dg, b_dg.to(p_dg.dtype.element_ty), boundary_check=(0, 1))
+    desc_dg.store([i_t * BT, 0], b_dg.to(desc_dg.dtype))
     tl.store(dA + i_t * H + i_h, b_dA)
 
     if HAS_BETA:
-        p_b = tl.make_block_ptr(beta + i_h, (T,), (H,), (i_t * BT,), (BT,), (0,))
-        p_db = tl.make_block_ptr(dbeta + i_h, (T,), (H,), (i_t * BT,), (BT,), (0,))
-        p_dyb = tl.make_block_ptr(dyb + i_h, (T,), (H,), (i_t * BT,), (BT,), (0,))
+        pass
 
-        b_b = tl.load(p_b, boundary_check=(0,)).to(tl.float32)
-        b_db = tl.load(p_dyb, boundary_check=(0,)).to(tl.float32) * b_b * (1.0 - b_b)
-        tl.store(p_db, b_db.to(p_db.dtype.element_ty), boundary_check=(0,))
+        b_b = tl.load(beta + i_h + (i_t * BT + tl.arange(0, BT)) * H, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0).to(tl.float32)
+        b_db = tl.load(dyb + i_h + (i_t * BT + tl.arange(0, BT)) * H, mask=(i_t * BT + tl.arange(0, BT)) < T, other=0).to(tl.float32) * b_b * (1.0 - b_b)
+        tl.store(dbeta + i_h + (i_t * BT + tl.arange(0, BT)) * H, b_db.to((dbeta + i_h).dtype.element_ty), mask=(i_t * BT + tl.arange(0, BT)) < T)
 
 
 @dispatch('kda')
@@ -393,15 +391,15 @@ def kda_gate_chunk_cumsum_vector_kernel(
     else:
         bos, eos = i_b * T, i_b * T + T
 
-    p_s = tl.make_block_ptr(s + (bos * H + i_h) * S, (T, S), (H*S, 1), (i_t * BT, i_s * BS), (BT, BS), (1, 0))
-    p_o = tl.make_block_ptr(o + (bos * H + i_h) * S, (T, S), (H*S, 1), (i_t * BT, i_s * BS), (BT, BS), (1, 0))
+    desc_s = make_tensor_descriptor(s + (bos * H + i_h) * S, [T, S], [H*S, 1], [BT, BS])
+    desc_o = make_tensor_descriptor(o + (bos * H + i_h) * S, [T, S], [H*S, 1], [BT, BS])
     # [BT, BS]
-    b_s = tl.load(p_s, boundary_check=(0, 1)).to(tl.float32)
+    b_s = desc_s.load([i_t * BT, i_s * BS]).to(tl.float32)
 
     # Apply dt_bias if exists
     if HAS_BIAS:
-        p_b = tl.make_block_ptr(dt_bias + i_h * S, (S,), (1,), (i_s * BS,), (BS,), (0,))
-        b_bias = tl.load(p_b, boundary_check=(0,)).to(tl.float32)
+        desc_b = make_tensor_descriptor(dt_bias + i_h * S, [S], [1], [BS])
+        b_bias = desc_b.load([i_s * BS]).to(tl.float32)
         b_s = b_s + b_bias[None, :]
 
     b_A = tl.load(A_log + i_h).to(tl.float32)
@@ -419,7 +417,7 @@ def kda_gate_chunk_cumsum_vector_kernel(
 
     if HAS_SCALE:
         b_o *= scale
-    tl.store(p_o, b_o.to(p_o.dtype.element_ty), boundary_check=(0, 1))
+    desc_o.store([i_t * BT, i_s * BS], b_o.to(desc_o.dtype))
 
 
 @input_guard
