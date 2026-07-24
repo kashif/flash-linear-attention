@@ -374,23 +374,20 @@ def chunk_gla_fwd_kernel_o(
     for i_k in range(tl.cdiv(K, BK)):
         desc_q = make_tensor_descriptor(q, [T, K], [H*K, 1], [BT, BK])
         desc_g = make_tensor_descriptor(g, [T, K], [HV*K, 1], [BT, BK])
-        if STATE_V_FIRST:
-            desc_h = make_tensor_descriptor(h, [V, K], [K, 1], [BV, BK])
-        else:
-            desc_h = make_tensor_descriptor(h, [K, V], [V, 1], [BK, BV])
-
         # [BT, BK]
         b_q = desc_q.load([i_t * BT, i_k * BK])
         # [BT, BK]
         b_g = desc_g.load([i_t * BT, i_k * BK]).to(tl.float32)
         # [BT, BK]
         b_qg = (b_q * exp2(b_g)).to(b_q.dtype)
-        b_h = desc_h.load([i_k * BK, i_v * BV])
-        if i_k >= 0:
-            if STATE_V_FIRST:
-                b_o += tl.dot(b_qg, tl.trans(b_h).to(b_qg.dtype))
-            else:
-                b_o += tl.dot(b_qg, b_h.to(b_qg.dtype))
+        if STATE_V_FIRST:
+            desc_h = make_tensor_descriptor(h, [V, K], [K, 1], [BV, BK])
+            b_h = desc_h.load([i_v * BV, i_k * BK])
+            b_o += tl.dot(b_qg, tl.trans(b_h).to(b_qg.dtype))
+        else:
+            desc_h = make_tensor_descriptor(h, [K, V], [V, 1], [BK, BV])
+            b_h = desc_h.load([i_k * BK, i_v * BV])
+            b_o += tl.dot(b_qg, b_h.to(b_qg.dtype))
     b_o *= scale
     desc_v = make_tensor_descriptor(v, [T, V], [HV*V, 1], [BT, BV])
     desc_o = make_tensor_descriptor(o, [T, V], [HV*V, 1], [BT, BV])

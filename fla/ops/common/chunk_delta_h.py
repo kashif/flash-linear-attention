@@ -121,54 +121,62 @@ def chunk_gated_delta_rule_fwd_kernel_h_blockdim64(
     if USE_INITIAL_STATE:
         if STATE_V_FIRST:
             desc_h0_1 = make_tensor_descriptor(h0, [V, K], [K, 1], [BV, 64])
+            b_h1 += desc_h0_1.load([i_v * BV, 0]).to(tl.float32)
         else:
             desc_h0_1 = make_tensor_descriptor(h0, [K, V], [V, 1], [64, BV])
-        b_h1 += desc_h0_1.load([0, i_v * BV]).to(tl.float32)
+            b_h1 += desc_h0_1.load([0, i_v * BV]).to(tl.float32)
         if K > 64:
             if STATE_V_FIRST:
                 desc_h0_2 = make_tensor_descriptor(h0, [V, K], [K, 1], [BV, 64])
+                b_h2 += desc_h0_2.load([i_v * BV, 64]).to(tl.float32)
             else:
                 desc_h0_2 = make_tensor_descriptor(h0, [K, V], [V, 1], [64, BV])
-            b_h2 += desc_h0_2.load([64, i_v * BV]).to(tl.float32)
+                b_h2 += desc_h0_2.load([64, i_v * BV]).to(tl.float32)
         if K > 128:
             if STATE_V_FIRST:
                 desc_h0_3 = make_tensor_descriptor(h0, [V, K], [K, 1], [BV, 64])
+                b_h3 += desc_h0_3.load([i_v * BV, 128]).to(tl.float32)
             else:
                 desc_h0_3 = make_tensor_descriptor(h0, [K, V], [V, 1], [64, BV])
-            b_h3 += desc_h0_3.load([128, i_v * BV]).to(tl.float32)
+                b_h3 += desc_h0_3.load([128, i_v * BV]).to(tl.float32)
         if K > 192:
             if STATE_V_FIRST:
                 desc_h0_4 = make_tensor_descriptor(h0, [V, K], [K, 1], [BV, 64])
+                b_h4 += desc_h0_4.load([i_v * BV, 192]).to(tl.float32)
             else:
                 desc_h0_4 = make_tensor_descriptor(h0, [K, V], [V, 1], [64, BV])
-            b_h4 += desc_h0_4.load([192, i_v * BV]).to(tl.float32)
+                b_h4 += desc_h0_4.load([192, i_v * BV]).to(tl.float32)
 
     # main recurrence
     for i_t in range(NT):
         i_t_int64 = i_t.to(tl.int64)
         if STATE_V_FIRST:
             desc_h1 = make_tensor_descriptor(h + i_t_int64 * HV*K*V, [V, K], [K, 1], [BV, 64])
+            desc_h1.store([i_v * BV, 0], b_h1.to(desc_h1.dtype))
         else:
             desc_h1 = make_tensor_descriptor(h + i_t_int64 * HV*K*V, [K, V], [V, 1], [64, BV])
-        desc_h1.store([0, i_v * BV], b_h1.to(desc_h1.dtype))
+            desc_h1.store([0, i_v * BV], b_h1.to(desc_h1.dtype))
         if K > 64:
             if STATE_V_FIRST:
                 desc_h2 = make_tensor_descriptor(h + i_t_int64 * HV*K*V, [V, K], [K, 1], [BV, 64])
+                desc_h2.store([i_v * BV, 64], b_h2.to(desc_h2.dtype))
             else:
                 desc_h2 = make_tensor_descriptor(h + i_t_int64 * HV*K*V, [K, V], [V, 1], [64, BV])
-            desc_h2.store([64, i_v * BV], b_h2.to(desc_h2.dtype))
+                desc_h2.store([64, i_v * BV], b_h2.to(desc_h2.dtype))
         if K > 128:
             if STATE_V_FIRST:
                 desc_h3 = make_tensor_descriptor(h + i_t_int64 * HV*K*V, [V, K], [K, 1], [BV, 64])
+                desc_h3.store([i_v * BV, 128], b_h3.to(desc_h3.dtype))
             else:
                 desc_h3 = make_tensor_descriptor(h + i_t_int64 * HV*K*V, [K, V], [V, 1], [64, BV])
-            desc_h3.store([128, i_v * BV], b_h3.to(desc_h3.dtype))
+                desc_h3.store([128, i_v * BV], b_h3.to(desc_h3.dtype))
         if K > 192:
             if STATE_V_FIRST:
                 desc_h4 = make_tensor_descriptor(h + i_t_int64 * HV*K*V, [V, K], [K, 1], [BV, 64])
+                desc_h4.store([i_v * BV, 192], b_h4.to(desc_h4.dtype))
             else:
                 desc_h4 = make_tensor_descriptor(h + i_t_int64 * HV*K*V, [K, V], [V, 1], [64, BV])
-            desc_h4.store([192, i_v * BV], b_h4.to(desc_h4.dtype))
+                desc_h4.store([192, i_v * BV], b_h4.to(desc_h4.dtype))
 
         desc_w = make_tensor_descriptor(w, [T, K], [HV*K, 1], [BT, 64])
         b_w = desc_w.load([i_t * BT, 0])
@@ -280,27 +288,31 @@ def chunk_gated_delta_rule_fwd_kernel_h_blockdim64(
     if STORE_FINAL_STATE:
         if STATE_V_FIRST:
             desc_ht = make_tensor_descriptor(ht, [V, K], [K, 1], [BV, 64])
+            desc_ht.store([i_v * BV, 0], b_h1.to(desc_ht.dtype))
         else:
             desc_ht = make_tensor_descriptor(ht, [K, V], [V, 1], [64, BV])
-        desc_ht.store([0, i_v * BV], b_h1.to(desc_ht.dtype))
+            desc_ht.store([0, i_v * BV], b_h1.to(desc_ht.dtype))
         if K > 64:
             if STATE_V_FIRST:
                 desc_ht = make_tensor_descriptor(ht, [V, K], [K, 1], [BV, 64])
+                desc_ht.store([i_v * BV, 64], b_h2.to(desc_ht.dtype))
             else:
                 desc_ht = make_tensor_descriptor(ht, [K, V], [V, 1], [64, BV])
-            desc_ht.store([64, i_v * BV], b_h2.to(desc_ht.dtype))
+                desc_ht.store([64, i_v * BV], b_h2.to(desc_ht.dtype))
         if K > 128:
             if STATE_V_FIRST:
                 desc_ht = make_tensor_descriptor(ht, [V, K], [K, 1], [BV, 64])
+                desc_ht.store([i_v * BV, 128], b_h3.to(desc_ht.dtype))
             else:
                 desc_ht = make_tensor_descriptor(ht, [K, V], [V, 1], [64, BV])
-            desc_ht.store([128, i_v * BV], b_h3.to(desc_ht.dtype))
+                desc_ht.store([128, i_v * BV], b_h3.to(desc_ht.dtype))
         if K > 192:
             if STATE_V_FIRST:
                 desc_ht = make_tensor_descriptor(ht, [V, K], [K, 1], [BV, 64])
+                desc_ht.store([i_v * BV, 192], b_h4.to(desc_ht.dtype))
             else:
                 desc_ht = make_tensor_descriptor(ht, [K, V], [V, 1], [64, BV])
-            desc_ht.store([192, i_v * BV], b_h4.to(desc_ht.dtype))
+                desc_ht.store([192, i_v * BV], b_h4.to(desc_ht.dtype))
 
 
 @triton.heuristics({
@@ -398,53 +410,61 @@ def chunk_gated_delta_rule_bwd_kernel_dhu_blockdim64(
     if USE_FINAL_STATE_GRADIENT:
         if STATE_V_FIRST:
             desc_dht1 = make_tensor_descriptor(dht, [V, K], [K, 1], [BV, 64])
+            b_dh1 += desc_dht1.load([i_v * BV, 0])
         else:
             desc_dht1 = make_tensor_descriptor(dht, [K, V], [V, 1], [64, BV])
-        b_dh1 += desc_dht1.load([0, i_v * BV])
+            b_dh1 += desc_dht1.load([0, i_v * BV])
         if K > 64:
             if STATE_V_FIRST:
                 desc_dht2 = make_tensor_descriptor(dht, [V, K], [K, 1], [BV, 64])
+                b_dh2 += desc_dht2.load([i_v * BV, 64])
             else:
                 desc_dht2 = make_tensor_descriptor(dht, [K, V], [V, 1], [64, BV])
-            b_dh2 += desc_dht2.load([64, i_v * BV])
+                b_dh2 += desc_dht2.load([64, i_v * BV])
         if K > 128:
             if STATE_V_FIRST:
                 desc_dht3 = make_tensor_descriptor(dht, [V, K], [K, 1], [BV, 64])
+                b_dh3 += desc_dht3.load([i_v * BV, 128])
             else:
                 desc_dht3 = make_tensor_descriptor(dht, [K, V], [V, 1], [64, BV])
-            b_dh3 += desc_dht3.load([128, i_v * BV])
+                b_dh3 += desc_dht3.load([128, i_v * BV])
         if K > 192:
             if STATE_V_FIRST:
                 desc_dht4 = make_tensor_descriptor(dht, [V, K], [K, 1], [BV, 64])
+                b_dh4 += desc_dht4.load([i_v * BV, 192])
             else:
                 desc_dht4 = make_tensor_descriptor(dht, [K, V], [V, 1], [64, BV])
-            b_dh4 += desc_dht4.load([192, i_v * BV])
+                b_dh4 += desc_dht4.load([192, i_v * BV])
 
     for i_t in range(NT - 1, -1, -1):
         i_t_int64 = i_t.to(tl.int64)
         if STATE_V_FIRST:
             desc_dh1 = make_tensor_descriptor(dh + i_t_int64*HV*K*V, [V, K], [K, 1], [BV, 64])
+            desc_dh1.store([i_v * BV, 0], b_dh1.to(desc_dh1.dtype))
         else:
             desc_dh1 = make_tensor_descriptor(dh + i_t_int64*HV*K*V, [K, V], [V, 1], [64, BV])
-        desc_dh1.store([0, i_v * BV], b_dh1.to(desc_dh1.dtype))
+            desc_dh1.store([0, i_v * BV], b_dh1.to(desc_dh1.dtype))
         if K > 64:
             if STATE_V_FIRST:
                 desc_dh2 = make_tensor_descriptor(dh + i_t_int64*HV*K*V, [V, K], [K, 1], [BV, 64])
+                desc_dh2.store([i_v * BV, 64], b_dh2.to(desc_dh2.dtype))
             else:
                 desc_dh2 = make_tensor_descriptor(dh + i_t_int64*HV*K*V, [K, V], [V, 1], [64, BV])
-            desc_dh2.store([64, i_v * BV], b_dh2.to(desc_dh2.dtype))
+                desc_dh2.store([64, i_v * BV], b_dh2.to(desc_dh2.dtype))
         if K > 128:
             if STATE_V_FIRST:
                 desc_dh3 = make_tensor_descriptor(dh + i_t_int64*HV*K*V, [V, K], [K, 1], [BV, 64])
+                desc_dh3.store([i_v * BV, 128], b_dh3.to(desc_dh3.dtype))
             else:
                 desc_dh3 = make_tensor_descriptor(dh + i_t_int64*HV*K*V, [K, V], [V, 1], [64, BV])
-            desc_dh3.store([128, i_v * BV], b_dh3.to(desc_dh3.dtype))
+                desc_dh3.store([128, i_v * BV], b_dh3.to(desc_dh3.dtype))
         if K > 192:
             if STATE_V_FIRST:
                 desc_dh4 = make_tensor_descriptor(dh + i_t_int64*HV*K*V, [V, K], [K, 1], [BV, 64])
+                desc_dh4.store([i_v * BV, 192], b_dh4.to(desc_dh4.dtype))
             else:
                 desc_dh4 = make_tensor_descriptor(dh + i_t_int64*HV*K*V, [K, V], [V, 1], [64, BV])
-            desc_dh4.store([192, i_v * BV], b_dh4.to(desc_dh4.dtype))
+                desc_dh4.store([192, i_v * BV], b_dh4.to(desc_dh4.dtype))
 
         last_idx = min((i_t + 1) * BT, T) - 1
         if USE_G:
@@ -580,27 +600,31 @@ def chunk_gated_delta_rule_bwd_kernel_dhu_blockdim64(
     if USE_INITIAL_STATE:
         if STATE_V_FIRST:
             desc_dh0 = make_tensor_descriptor(dh0, [V, K], [K, 1], [BV, 64])
+            desc_dh0.store([i_v * BV, 0], b_dh1.to(desc_dh0.dtype))
         else:
             desc_dh0 = make_tensor_descriptor(dh0, [K, V], [V, 1], [64, BV])
-        desc_dh0.store([0, i_v * BV], b_dh1.to(desc_dh0.dtype))
+            desc_dh0.store([0, i_v * BV], b_dh1.to(desc_dh0.dtype))
         if K > 64:
             if STATE_V_FIRST:
                 desc_dh1 = make_tensor_descriptor(dh0, [V, K], [K, 1], [BV, 64])
+                desc_dh1.store([i_v * BV, 64], b_dh2.to(desc_dh1.dtype))
             else:
                 desc_dh1 = make_tensor_descriptor(dh0, [K, V], [V, 1], [64, BV])
-            desc_dh1.store([64, i_v * BV], b_dh2.to(desc_dh1.dtype))
+                desc_dh1.store([64, i_v * BV], b_dh2.to(desc_dh1.dtype))
         if K > 128:
             if STATE_V_FIRST:
                 desc_dh2 = make_tensor_descriptor(dh0, [V, K], [K, 1], [BV, 64])
+                desc_dh2.store([i_v * BV, 128], b_dh3.to(desc_dh2.dtype))
             else:
                 desc_dh2 = make_tensor_descriptor(dh0, [K, V], [V, 1], [64, BV])
-            desc_dh2.store([128, i_v * BV], b_dh3.to(desc_dh2.dtype))
+                desc_dh2.store([128, i_v * BV], b_dh3.to(desc_dh2.dtype))
         if K > 192:
             if STATE_V_FIRST:
                 desc_dh3 = make_tensor_descriptor(dh0, [V, K], [K, 1], [BV, 64])
+                desc_dh3.store([i_v * BV, 192], b_dh4.to(desc_dh3.dtype))
             else:
                 desc_dh3 = make_tensor_descriptor(dh0, [K, V], [V, 1], [64, BV])
-            desc_dh3.store([192, i_v * BV], b_dh4.to(desc_dh3.dtype))
+                desc_dh3.store([192, i_v * BV], b_dh4.to(desc_dh3.dtype))
 
 
 @dispatch('common')
