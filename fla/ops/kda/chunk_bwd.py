@@ -221,19 +221,21 @@ def chunk_kda_bwd_kernel_wy_dqkg_fused(
         for i_v in range(tl.cdiv(V, BV)):
             desc_v_new = make_tensor_descriptor(v_new, [T, V], [HV*V, 1], [BT, BV])
             desc_do = make_tensor_descriptor(do, [T, V], [HV*V, 1], [BT, BV])
-            if STATE_V_FIRST:
-                desc_h = make_tensor_descriptor(h, [V, K], [K, 1], [BV, BK])
-                desc_dh = make_tensor_descriptor(dh, [V, K], [K, 1], [BV, BK])
-            else:
-                desc_h = make_tensor_descriptor(h, [K, V], [V, 1], [BK, BV])
-                desc_dh = make_tensor_descriptor(dh, [K, V], [V, 1], [BK, BV])
             desc_dv = make_tensor_descriptor(dv, [T, V], [HV*V, 1], [BT, BV])
             # [BT, BV]
             b_v_new = desc_v_new.load([i_t * BT, i_v * BV])
             b_do = desc_do.load([i_t * BT, i_v * BV])
             # [BV, BK]
-            b_h = tl.trans(desc_h.load([i_k * BK, i_v * BV]))
-            b_dh = tl.trans(desc_dh.load([i_k * BK, i_v * BV]))
+            if STATE_V_FIRST:
+                desc_h = make_tensor_descriptor(h, [V, K], [K, 1], [BV, BK])
+                desc_dh = make_tensor_descriptor(dh, [V, K], [K, 1], [BV, BK])
+                b_h = desc_h.load([i_v * BV, i_k * BK])
+                b_dh = desc_dh.load([i_v * BV, i_k * BK])
+            else:
+                desc_h = make_tensor_descriptor(h, [K, V], [V, 1], [BK, BV])
+                desc_dh = make_tensor_descriptor(dh, [K, V], [V, 1], [BK, BV])
+                b_h = tl.trans(desc_h.load([i_k * BK, i_v * BV]))
+                b_dh = tl.trans(desc_dh.load([i_k * BK, i_v * BV]))
             # [BT, BV]
             b_dv = desc_dv.load([i_t * BT, i_v * BV])
 
