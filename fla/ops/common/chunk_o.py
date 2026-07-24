@@ -92,20 +92,19 @@ def chunk_fwd_kernel_o(
     for i_k in range(tl.cdiv(K, BK)):
         desc_q = make_tensor_descriptor(q, [T, K], [H*K, 1], [BT, BK])
         desc_k = make_tensor_descriptor(k, [T, K], [H*K, 1], [BT, BK])
-        if STATE_V_FIRST:
-            desc_h = make_tensor_descriptor(h, [V, K], [K, 1], [BV, BK])
-        else:
-            desc_h = make_tensor_descriptor(h, [K, V], [V, 1], [BK, BV])
         # [BT, BK]
         b_q = desc_q.load([i_t * BT, i_k * BK])
         # [BK, BT]
         b_k = tl.trans(desc_k.load([i_t * BT, i_k * BK]))
-        b_h = desc_h.load([i_k * BK, i_v * BV])
 
         # [BT, BK] @ [BK, BV] -> [BT, BV]
         if STATE_V_FIRST:
+            desc_h = make_tensor_descriptor(h, [V, K], [K, 1], [BV, BK])
+            b_h = desc_h.load([i_v * BV, i_k * BK])
             b_o += tl.dot(b_q, tl.trans(b_h))
         else:
+            desc_h = make_tensor_descriptor(h, [K, V], [V, 1], [BK, BV])
+            b_h = desc_h.load([i_k * BK, i_v * BV])
             b_o += tl.dot(b_q, b_h)
         # [BT, BK] @ [BK, BT] -> [BT, BT]
         b_A += tl.dot(b_q, b_k)
@@ -228,18 +227,20 @@ def chunk_bwd_kernel_dqkwg(
     for i_v in range(tl.cdiv(V, BV)):
         desc_v = make_tensor_descriptor(v, [T, V], [HV*V, 1], [BT, BV])
         desc_do = make_tensor_descriptor(do, [T, V], [HV*V, 1], [BT, BV])
-        if STATE_V_FIRST:
-            desc_h = make_tensor_descriptor(h, [V, K], [K, 1], [BV, BK])
-            desc_dh = make_tensor_descriptor(dh, [V, K], [K, 1], [BV, BK])
-        else:
-            desc_h = make_tensor_descriptor(h, [K, V], [V, 1], [BK, BV])
-            desc_dh = make_tensor_descriptor(dh, [K, V], [V, 1], [BK, BV])
         # [BT, BV]
         b_v = desc_v.load([i_t * BT, i_v * BV])
         b_do = desc_do.load([i_t * BT, i_v * BV])
         # [BV, BK]
-        b_h = tl.trans(desc_h.load([i_k * BK, i_v * BV]))
-        b_dh = tl.trans(desc_dh.load([i_k * BK, i_v * BV]))
+        if STATE_V_FIRST:
+            desc_h = make_tensor_descriptor(h, [V, K], [K, 1], [BV, BK])
+            desc_dh = make_tensor_descriptor(dh, [V, K], [K, 1], [BV, BK])
+            b_h = desc_h.load([i_v * BV, i_k * BK])
+            b_dh = desc_dh.load([i_v * BV, i_k * BK])
+        else:
+            desc_h = make_tensor_descriptor(h, [K, V], [V, 1], [BK, BV])
+            desc_dh = make_tensor_descriptor(dh, [K, V], [V, 1], [BK, BV])
+            b_h = tl.trans(desc_h.load([i_k * BK, i_v * BV]))
+            b_dh = tl.trans(desc_dh.load([i_k * BK, i_v * BV]))
         if USE_G:
             b_dg_last += (tl.sum(b_h * b_dh))
         # [BT, BV] @ [BV, BT] -> [BT, BT]

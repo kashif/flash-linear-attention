@@ -97,13 +97,13 @@ def chunk_fwd_kernel_h(
         desc_v = make_tensor_descriptor(v + (bos*H + i_h) * V, [T, V], [H*V, 1], [BT, BV])
 
         o_h = ((boh + i_s) * H + i_h).to(tl.int64) * K*V
-        if STATE_V_FIRST:
-            desc_h = make_tensor_descriptor(h + o_h, [V, K], [K, 1], [BV, BK])
-        else:
-            desc_h = make_tensor_descriptor(h + o_h, [K, V], [V, 1], [BK, BV])
-
         if i_t % NTS == 0:
-            desc_h.store([i_k * BK, i_v * BV], (tl.trans(b_h) if STATE_V_FIRST else b_h).to(desc_h.dtype))
+            if STATE_V_FIRST:
+                desc_h = make_tensor_descriptor(h + o_h, [V, K], [K, 1], [BV, BK])
+                desc_h.store([i_v * BV, i_k * BK], tl.trans(b_h).to(desc_h.dtype))
+            else:
+                desc_h = make_tensor_descriptor(h + o_h, [K, V], [V, 1], [BK, BV])
+                desc_h.store([i_k * BK, i_v * BV], b_h.to(desc_h.dtype))
         # [BK, BT]
         b_k = tl.trans(desc_k.load([i_t * BT, i_k * BK]))
         # [BT, BV]
@@ -235,13 +235,13 @@ def chunk_bwd_kernel_dh(
     for i_t in range(NT - 1, -1, -1):
         i_s = i_t // (BS // BT)
         o_dh = ((boh + i_s) * H + i_h).to(tl.int64) * K*V
-        if STATE_V_FIRST:
-            desc_dh = make_tensor_descriptor(dh + o_dh, [V, K], [K, 1], [BV, BK])
-        else:
-            desc_dh = make_tensor_descriptor(dh + o_dh, [K, V], [V, 1], [BK, BV])
-
         if i_t % (BS // BT) == 0:
-            desc_dh.store([i_k * BK, i_v * BV], (tl.trans(b_dh) if STATE_V_FIRST else b_dh).to(desc_dh.dtype))
+            if STATE_V_FIRST:
+                desc_dh = make_tensor_descriptor(dh + o_dh, [V, K], [K, 1], [BV, BK])
+                desc_dh.store([i_v * BV, i_k * BK], tl.trans(b_dh).to(desc_dh.dtype))
+            else:
+                desc_dh = make_tensor_descriptor(dh + o_dh, [K, V], [V, 1], [BK, BV])
+                desc_dh.store([i_k * BK, i_v * BV], b_dh.to(desc_dh.dtype))
         last_idx = min(i_t * BT + BT, T) - 1
         # [BK, BT]
         desc_q = make_tensor_descriptor(q + (bos*HQ + i_hq) * K, [T, K], [HQ*K, 1], [BT, BK])

@@ -652,15 +652,15 @@ def chunk_gla_bwd_kernel_dv(
         desc_k = make_tensor_descriptor(k + (bos * H + i_h) * K, [T, K], [H*K, 1], [BT, BK])
         desc_gk = make_tensor_descriptor(g + (bos * H + i_h) * K, [T, K], [H*K, 1], [BT, BK])
         p_gn = g + (bos + min(i_t * BT + BT, T) - 1)*H*K + i_h * K + o_k
+        b_k = desc_k.load([i_t * BT, i_k * BK])
+        b_gk = desc_gk.load([i_t * BT, i_k * BK])
         if STATE_V_FIRST:
             # dh stored as [V, K]; read a logical [BK, BV] tile via on-the-fly transpose
             desc_dh = make_tensor_descriptor(dh + (i_tg * H + i_h) * K*V, [V, K], [K, 1], [BV, BK])
+            b_dh = tl.trans(desc_dh.load([i_v * BV, i_k * BK]))
         else:
             desc_dh = make_tensor_descriptor(dh + (i_tg * H + i_h) * K*V, [K, V], [V, 1], [BK, BV])
-
-        b_k = desc_k.load([i_t * BT, i_k * BK])
-        b_gk = desc_gk.load([i_t * BT, i_k * BK])
-        b_dh = desc_dh.load([i_k * BK, i_v * BV])
+            b_dh = desc_dh.load([i_k * BK, i_v * BV])
 
         b_gn = exp2(tl.load(p_gn, mask=m_k, other=0)[None, :] - b_gk)
         b_k = (b_k * b_gn).to(b_k.dtype)
@@ -752,19 +752,21 @@ def chunk_gla_bwd_kernel_inter(
     for i_v in range(tl.cdiv(V, BV)):
         desc_v = make_tensor_descriptor(v, [T, V], [H*V, 1], [BT, BV])
         desc_do = make_tensor_descriptor(do, [T, V], [H*V, 1], [BT, BV])
-        if STATE_V_FIRST:
-            # h / dh stored as [V, K] -- the [BV, BK] tile is now a contiguous read
-            desc_h = make_tensor_descriptor(h, [V, K], [K, 1], [BV, BK])
-            desc_dh = make_tensor_descriptor(dh, [V, K], [K, 1], [BV, BK])
-        else:
-            desc_h = make_tensor_descriptor(h, [K, V], [V, 1], [BK, BV])
-            desc_dh = make_tensor_descriptor(dh, [K, V], [V, 1], [BK, BV])
         # [BT, BV]
         b_v = desc_v.load([i_t * BT, i_v * BV])
         b_do = desc_do.load([i_t * BT, i_v * BV])
         # [BV, BK]
-        b_h = tl.trans(desc_h.load([i_k * BK, i_v * BV]))
-        b_dh = tl.trans(desc_dh.load([i_k * BK, i_v * BV]))
+        if STATE_V_FIRST:
+            # h / dh stored as [V, K] -- the [BV, BK] tile is a contiguous read
+            desc_h = make_tensor_descriptor(h, [V, K], [K, 1], [BV, BK])
+            desc_dh = make_tensor_descriptor(dh, [V, K], [K, 1], [BV, BK])
+            b_h = desc_h.load([i_v * BV, i_k * BK])
+            b_dh = desc_dh.load([i_v * BV, i_k * BK])
+        else:
+            desc_h = make_tensor_descriptor(h, [K, V], [V, 1], [BK, BV])
+            desc_dh = make_tensor_descriptor(dh, [K, V], [V, 1], [BK, BV])
+            b_h = tl.trans(desc_h.load([i_k * BK, i_v * BV]))
+            b_dh = tl.trans(desc_dh.load([i_k * BK, i_v * BV]))
 
         # [BK]
         b_dgk += tl.sum(b_h * b_dh, axis=0)
